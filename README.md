@@ -23,6 +23,7 @@ pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 | `hk_bus_common.py` | Shared library (ETA parsing, schedule search, argument parsers) |
 | `bus_alarm_lib.py` | Android alarm library (`am start` command builder and executor) |
 | `google_calendar_lib.py` | Google Calendar library (OAuth2 auth, event creation) |
+| `add_bus_schedule_to_calendar.py` | CLI to find a bus schedule and create a Google Calendar event |
 
 ---
 
@@ -295,6 +296,121 @@ event = create_calendar_event(
     location="West Kowloon Station Bus Terminus",
 )
 print(event["htmlLink"])
+```
+
+---
+
+## add_bus_schedule_to_calendar.py
+
+Finds the latest bus ETA within a time window for a given stop, then creates a Google Calendar event timed to that schedule. Supports a debug mode (`-add_event_debug`) that prints the full event details to stdout without calling the Calendar API, allowing offline testing without credentials.
+
+### Usage
+
+```
+python add_bus_schedule_to_calendar.py -seq N
+    -search_schedule_from HH:MM -search_schedule_to HH:MM
+    (-add_event | -add_event_debug)
+    [-route_id ROUTE_ID]
+    [-search_schedule_tz TZ]
+    [-calendar_id ID]
+    [-credentials_file PATH]
+    [-token_file PATH]
+    [-duration_minutes N]
+```
+
+### Parameters
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `-seq` | Yes | — | Stop number (1-based) to query. |
+| `-search_schedule_from` | Yes | — | Start of the time window (`HH:MM`). |
+| `-search_schedule_to` | Yes | — | End of the time window (`HH:MM`). Must be later than `-search_schedule_from`. |
+| `-add_event` | Yes* | — | Create the event in Google Calendar. Mutually exclusive with `-add_event_debug`. |
+| `-add_event_debug` | Yes* | — | Print the event details to stdout without calling the Calendar API. Mutually exclusive with `-add_event`. |
+| `-route_id` | No | `81+1+HIGH SPEED RAIL WEST KOWLOON STATION+WO CHE` | Full route ID string. |
+| `-search_schedule_tz` | No | `+08:00` | Timezone for the search window. Accepts `local` or a fixed offset like `+09:00` / `-05:00`. |
+| `-calendar_id` | No | `primary` | Target Google Calendar ID. Use `'primary'` for your default calendar, or a calendar's email-style ID (e.g. `abc123@group.calendar.google.com`). |
+| `-credentials_file` | No | `credentials.json` | Path to the OAuth 2.0 client-secrets JSON from Google Cloud Console. |
+| `-token_file` | No | `token.json` | Path to the cached OAuth token file. |
+| `-duration_minutes` | No | `30` | Calendar event duration in minutes. |
+
+*Exactly one of `-add_event` / `-add_event_debug` is required.
+
+### Event content
+
+The event is always created with the title **`Bus schedule`**. The description includes all information equivalent to what `bus_route_info.py` prints:
+
+- Route header (Route ID, Origin, Dest)
+- Stop details (sequence number, operator, stop ID, English and Chinese names)
+- Search window and matched schedule timestamp
+- All upcoming ETAs, with the matched entry marked `*`
+- Raw fields of the matched ETA entry (as returned by the API)
+
+### Debug mode output
+
+`-add_event_debug` prints the event without contacting Google. Useful for verifying the schedule search and description before committing to a live API call:
+
+```
+Found schedule: 2026-04-21T14:32+08:00 (5m)
+
+Event details (not submitted to Google Calendar):
+  Title    : Bus schedule
+  Start    : 2026-04-21T14:32:00+08:00
+  End      : 2026-04-21T15:02:00+08:00
+  Calendar : primary
+
+Description:
+--------------------------------------------------
+==================================================
+Route ID : 81+1+HIGH SPEED RAIL WEST KOWLOON STATION+WO CHE
+Origin   : HIGH SPEED RAIL WEST KOWLOON STATION  /  西九龍站
+Dest     : WO CHE  /  禾車
+==================================================
+
+Stop     : 3 of 15
+Operator : kmb
+Stop ID  : E10101XXXX
+English  : West Kowloon Station Bus Terminus
+Chinese  : 西九龍站巴士總站
+
+Search window : 14:00–15:00  (tz +08:00)
+Matched       : 2026-04-21T14:32+08:00 (5m)
+
+All upcoming ETAs:
+  2026-04-21T14:32+08:00 (5m)  *
+  2026-04-21T14:50+08:00 (23m)
+
+Matched schedule (raw fields):
+  eta    : 2026-04-21T14:32:00+08:00
+  remark : {'zh': '原定班次', 'en': 'Scheduled Bus'}
+  co     : kmb
+--------------------------------------------------
+```
+
+### Examples
+
+```bash
+# Dry-run: print event details without calling the Calendar API
+python add_bus_schedule_to_calendar.py -seq 3 \
+    -search_schedule_from 14:00 -search_schedule_to 15:00 \
+    -add_event_debug
+
+# Create the event in the primary calendar
+python add_bus_schedule_to_calendar.py -seq 3 \
+    -search_schedule_from 14:00 -search_schedule_to 15:00 \
+    -add_event
+
+# Create the event in a specific calendar
+python add_bus_schedule_to_calendar.py -seq 3 \
+    -search_schedule_from 14:00 -search_schedule_to 15:00 \
+    -calendar_id "abc123@group.calendar.google.com" \
+    -add_event
+
+# Custom credentials file, 60-minute event, dry-run
+python add_bus_schedule_to_calendar.py -seq 3 \
+    -search_schedule_from 14:00 -search_schedule_to 15:00 \
+    -credentials_file ~/my_creds.json -duration_minutes 60 \
+    -add_event_debug
 ```
 
 ---
