@@ -1,15 +1,17 @@
 # HK Bus Alarm
 
-A pair of command-line tools to query Hong Kong bus route stops and live ETAs, with the ability to set an Android alarm for a found bus schedule.
+A pair of command-line tools to query Hong Kong bus route stops and live ETAs, with the ability to set an Android alarm or create a Google Calendar event for a found bus schedule.
 
 ## Requirements
 
 - Python 3.10+
 - [`hk-bus-eta`](https://pypi.org/project/hk-bus-eta/) library
 - Android device with Termux (required only for `set_alarm_with_bus_eta.py -add_alarm`)
+- Google Calendar API libraries (required only for `google_calendar_lib.py`)
 
 ```bash
 pip install hk-bus-eta
+pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 ```
 
 ## Files
@@ -20,6 +22,7 @@ pip install hk-bus-eta
 | `set_alarm_with_bus_eta.py` | Find a bus within a time window and set an Android alarm |
 | `hk_bus_common.py` | Shared library (ETA parsing, schedule search, argument parsers) |
 | `bus_alarm_lib.py` | Android alarm library (`am start` command builder and executor) |
+| `google_calendar_lib.py` | Google Calendar library (OAuth2 auth, event creation) |
 
 ---
 
@@ -201,6 +204,97 @@ python set_alarm_with_bus_eta.py -seq 3 \
     -search_schedule_tz +09:00 \
     -alarm_label "Take bus 81" \
     -add_alarm_debug
+```
+
+---
+
+## google_calendar_lib.py
+
+Library for creating Google Calendar events timed to a bus schedule datetime. Authenticates via OAuth 2.0 using credentials downloaded from Google Cloud Console.
+
+### One-time Google Cloud setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a project and enable the **Google Calendar API**.
+3. Under *APIs & Services → Credentials*, create an **OAuth 2.0 Client ID** (application type: *Desktop app*).
+4. Download the client-secrets file and save it as `credentials.json` (or any path you pass to the function).
+5. On first use a browser window opens for user authorisation. The granted token is saved to `token.json` and reused (with silent refresh) on all subsequent calls.
+
+### Functions
+
+#### `get_calendar_service(credentials_file, token_file)`
+
+Authenticates and returns a Google Calendar API service object. All other functions accept this object so you can authenticate once and make multiple calls.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `credentials_file` | `credentials.json` | Path to the OAuth 2.0 client-secrets JSON from Google Cloud Console. |
+| `token_file` | `token.json` | Path where the granted OAuth token is cached between runs. |
+
+#### `create_calendar_event(service, calendar_id, summary, start_dt, *, end_dt, duration_minutes, description, location)`
+
+Low-level function that creates a single event on the specified calendar.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `service` | — | Service object from `get_calendar_service()`. |
+| `calendar_id` | — | `'primary'` for the user's default calendar, or the calendar's email-style ID (e.g. `abc123@group.calendar.google.com`). |
+| `summary` | — | Event title shown in Google Calendar. |
+| `start_dt` | — | Timezone-aware `datetime` for the event start. Naive datetimes are treated as UTC. |
+| `end_dt` | `None` | Event end datetime. If omitted, defaults to `start_dt + duration_minutes`. |
+| `duration_minutes` | `30` | Event duration when `end_dt` is not supplied. |
+| `description` | `""` | Optional event body text. |
+| `location` | `""` | Optional location string. |
+
+Returns the created event resource dict (contains `id`, `htmlLink`, etc.).
+
+#### `add_bus_schedule_event(schedule_dt, summary, *, credentials_file, token_file, calendar_id, duration_minutes, description, location)`
+
+Convenience wrapper: authenticates and creates an event in one call.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `schedule_dt` | — | Timezone-aware `datetime` of the bus arrival (used as event start). |
+| `summary` | `Bus schedule` | Event title. |
+| `credentials_file` | `credentials.json` | Path to OAuth 2.0 client-secrets JSON. |
+| `token_file` | `token.json` | Path to cached OAuth token. |
+| `calendar_id` | `primary` | Target calendar (`'primary'` or a specific calendar's ID). |
+| `duration_minutes` | `30` | Event duration in minutes. |
+| `description` | `""` | Optional event body text. |
+| `location` | `""` | Optional location string. |
+
+Prints the URL of the created event and returns the event resource dict.
+
+### Usage example
+
+```python
+from google_calendar_lib import get_calendar_service, create_calendar_event, add_bus_schedule_event
+from datetime import datetime, timezone, timedelta
+
+hkt = timezone(timedelta(hours=8))
+schedule_dt = datetime(2026, 4, 21, 14, 32, tzinfo=hkt)
+
+# One-liner convenience wrapper (authenticates internally)
+event = add_bus_schedule_event(
+    schedule_dt,
+    summary="Take bus 81",
+    calendar_id="primary",
+    duration_minutes=60,
+    description="Bus from West Kowloon to Wo Che",
+)
+
+# Or use the lower-level functions if you need multiple events
+service = get_calendar_service("credentials.json", "token.json")
+event = create_calendar_event(
+    service,
+    calendar_id="abc123@group.calendar.google.com",
+    summary="Take bus 81",
+    start_dt=schedule_dt,
+    duration_minutes=60,
+    description="Bus from West Kowloon to Wo Che",
+    location="West Kowloon Station Bus Terminus",
+)
+print(event["htmlLink"])
 ```
 
 ---
