@@ -336,15 +336,20 @@ python add_bus_schedule_to_calendar.py -seq N
 
 *Exactly one of `-add_event` / `-add_event_debug` is required.
 
+### Event start time
+
+- **Schedule found** — event start is set to the matched bus schedule time.
+- **No schedule found** — event start is set to the script's run time (now). The event is still created; the description notes that no schedule was found in the window.
+
 ### Event content
 
 The event is always created with the title **`Bus schedule`**. The description includes all information equivalent to what `bus_route_info.py` prints:
 
 - Route header (Route ID, Origin, Dest)
 - Stop details (sequence number, operator, stop ID, English and Chinese names)
-- Search window and matched schedule timestamp
+- Search window and matched schedule timestamp (or a note that none was found)
 - All upcoming ETAs, with the matched entry marked `*`
-- Raw fields of the matched ETA entry (as returned by the API)
+- Raw fields of the matched ETA entry (omitted when no schedule was found)
 
 ### Debug mode output
 

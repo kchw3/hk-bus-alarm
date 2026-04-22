@@ -72,7 +72,7 @@ def build_event_description(
     name_en: str,
     name_zh: str,
     etas: list,
-    found: dict,
+    found: dict | None,
     from_dt: datetime,
     to_dt: datetime,
 ) -> str:
@@ -95,9 +95,13 @@ def build_event_description(
         f"Chinese  : {name_zh}",
         "",
         f"Search window : {from_dt.strftime('%H:%M')}–{to_dt.strftime('%H:%M')}  (tz {_offset(from_dt)})",
-        f"Matched       : {format_eta_entry(found)}",
-        "",
     ]
+
+    if found is not None:
+        lines.append(f"Matched       : {format_eta_entry(found)}")
+    else:
+        lines.append("Matched       : (no schedule found — event start set to script run time)")
+    lines.append("")
 
     # All upcoming ETAs, marking the matched one
     upcoming = [
@@ -118,11 +122,15 @@ def build_event_description(
             marker = "  *" if entry is found else ""
             lines.append(f"  {ts} ({diff_min}m){marker}")
         lines.append("")
+    else:
+        lines.append("All upcoming ETAs: (none)")
+        lines.append("")
 
     # Raw fields of the matched schedule entry
-    lines.append("Matched schedule (raw fields):")
-    for key, value in found.items():
-        lines.append(f"  {key} : {value}")
+    if found is not None:
+        lines.append("Matched schedule (raw fields):")
+        for key, value in found.items():
+            lines.append(f"  {key} : {value}")
 
     return "\n".join(lines)
 
@@ -187,16 +195,17 @@ def run(
 
     found = find_schedule(etas, from_dt, to_dt)
 
-    if found is None:
+    if found is not None:
+        found_dt = eta_to_datetime(found)
+        print(f"Found schedule: {format_eta_entry(found)}\n")
+    else:
+        found_dt = datetime.now(tz=timezone.utc)
         print(
             f"No bus schedule found between "
             f"{from_dt.strftime('%H:%M')} and {to_dt.strftime('%H:%M')} "
-            f"(tz {_offset(from_dt)})."
+            f"(tz {_offset(from_dt)}). "
+            f"Event start time set to now: {found_dt.strftime('%Y-%m-%dT%H:%M')} {_offset(found_dt)}\n"
         )
-        sys.exit(1)
-
-    found_dt = eta_to_datetime(found)
-    print(f"Found schedule: {format_eta_entry(found)}\n")
 
     description = build_event_description(
         route_id=route_id,
