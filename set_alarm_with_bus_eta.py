@@ -119,7 +119,7 @@ def run(
         print(f"Error fetching ETAs: {exc}")
         sys.exit(1)
 
-    tz = window.schedule_tz if window.schedule_tz is not None else timezone(timedelta(hours=8))
+    tz = window.schedule_tz
     today = date.today()
     from_dt = datetime.combine(today, window.schedule_from, tzinfo=tz)
     to_dt   = datetime.combine(today, window.schedule_to,   tzinfo=tz)
@@ -152,7 +152,7 @@ def run(
         )
 
     # Clamp: alarm must be at least _MIN_ALARM_LEAD_MINUTES from now
-    min_alarm_dt = datetime.now(tz=timezone.utc) + timedelta(minutes=_MIN_ALARM_LEAD_MINUTES)
+    min_alarm_dt = datetime.now(tz=tz) + timedelta(minutes=_MIN_ALARM_LEAD_MINUTES)
     if alarm_dt < min_alarm_dt:
         print(
             f"Alarm time {alarm_dt.strftime('%H:%M')} {_offset(alarm_dt)} is less than "
@@ -196,7 +196,7 @@ if __name__ == "__main__":
         help="End of time window (e.g. 15:00).",
     )
     _ = parser.add_argument(
-        "-search_schedule_tz", type=parse_tz, default=None, metavar="TZ",
+        "-search_schedule_tz", type=parse_tz, default=timezone(timedelta(hours=8)), metavar="TZ",
         help=(
             "Timezone for the search window. "
             "Accepted: 'local' or a fixed offset like '+08:00' / '-05:00'. "
