@@ -266,25 +266,25 @@ if __name__ == "__main__":
         ),
     )
 
-    parser.add_argument(
+    _ = parser.add_argument(
         "-route_id",
         default=DEFAULT_ROUTE_ID,
         metavar="ROUTE_ID",
         help=f'Route ID (default: "{DEFAULT_ROUTE_ID}")',
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-seq", type=int, required=True, metavar="N",
         help="Stop number (1-based) to query.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_from", type=parse_hhmm, required=True, metavar="HH:MM",
         help="Start of time window to search for a bus schedule (e.g. 14:00).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_to", type=parse_hhmm, required=True, metavar="HH:MM",
         help="End of time window (e.g. 15:00). Must be later than -search_schedule_from.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_tz", type=parse_tz, default=None, metavar="TZ",
         help=(
             "Timezone for the search window. "
@@ -292,7 +292,7 @@ if __name__ == "__main__":
             "Default: +08:00."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-calendar_id",
         default=DEFAULT_CALENDAR_ID,
         metavar="ID",
@@ -302,29 +302,29 @@ if __name__ == "__main__":
             "email-style ID (e.g. abc123@group.calendar.google.com)."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-credentials_file",
         default=DEFAULT_CREDENTIALS_FILE,
         metavar="PATH",
         help=f"Path to OAuth 2.0 client-secrets JSON (default: {DEFAULT_CREDENTIALS_FILE}).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-token_file",
         default=DEFAULT_TOKEN_FILE,
         metavar="PATH",
         help=f"Path to cached OAuth token file (default: {DEFAULT_TOKEN_FILE}).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-duration_minutes", type=int, default=DEFAULT_DURATION_MINUTES, metavar="N",
         help=f"Calendar event duration in minutes (default: {DEFAULT_DURATION_MINUTES}).",
     )
 
     event_mode = parser.add_mutually_exclusive_group(required=True)
-    event_mode.add_argument(
+    _ = event_mode.add_argument(
         "-add_event", dest="add_event", action="store_true",
         help="Create the event in Google Calendar.",
     )
-    event_mode.add_argument(
+    _ = event_mode.add_argument(
         "-add_event_debug", dest="add_event_debug", action="store_true",
         help="Print the event details to stdout without calling the Calendar API.",
     )

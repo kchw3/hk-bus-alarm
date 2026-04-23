@@ -294,29 +294,29 @@ if __name__ == "__main__":
         usage='%(prog)s [-route_id ROUTE_ID] [-seq N] [-detail] '
               '[-search_schedule_from HH:MM] [-search_schedule_to HH:MM]',
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-route_id",
         default=DEFAULT_ROUTE_ID,
         metavar="ROUTE_ID",
         help=f'Route ID (default: "{DEFAULT_ROUTE_ID}")',
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-seq", type=int, default=None, metavar="N",
         help="Print only stop N (1-based). Omit to print all stops.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-detail", action="store_true", default=False,
         help="Print all raw ETA fields (PowerShell-style list). Requires -seq.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_from", type=parse_hhmm, default=None, metavar="HH:MM",
         help="Start of time window to search for a bus schedule (e.g. 14:00). Requires -seq.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_to", type=parse_hhmm, default=None, metavar="HH:MM",
         help="End of time window to search for a bus schedule (e.g. 15:00). Requires -seq.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_tz", type=parse_tz,
         default=None,   # resolved to +08:00 inside print_route_info when None
         metavar="TZ",

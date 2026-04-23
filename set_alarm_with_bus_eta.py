@@ -170,25 +170,25 @@ if __name__ == "__main__":
         ),
     )
 
-    parser.add_argument(
+    _ = parser.add_argument(
         "-route_id",
         default=DEFAULT_ROUTE_ID,
         metavar="ROUTE_ID",
         help=f'Route ID (default: "{DEFAULT_ROUTE_ID}")',
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-seq", type=int, required=True, metavar="N",
         help="Stop number (1-based) to query.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_from", type=parse_hhmm, required=True, metavar="HH:MM",
         help="Start of time window (e.g. 14:00).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_to", type=parse_hhmm, required=True, metavar="HH:MM",
         help="End of time window (e.g. 15:00).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-search_schedule_tz", type=parse_tz, default=None, metavar="TZ",
         help=(
             "Timezone for the search window. "
@@ -196,30 +196,30 @@ if __name__ == "__main__":
             "Default: +08:00."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-alarm_label",
         default=DEFAULT_ALARM_LABEL,
         metavar="LABEL",
         help=f'Alarm label shown on the Android clock app (default: "{DEFAULT_ALARM_LABEL}").',
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-alarm_default_time", type=parse_hhmm, default=None, metavar="HH:MM",
         help=(
             "Fallback alarm time (HH:MM) used when no bus schedule is found in the search window. "
             "Uses the same timezone as -search_schedule_tz (default +08:00)."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "-alarm_minutes_before_schedule", type=int, default=0, metavar="N",
         help="Set the alarm N minutes before the found bus schedule (default: 0).",
     )
 
     alarm_mode = parser.add_mutually_exclusive_group(required=True)
-    alarm_mode.add_argument(
+    _ = alarm_mode.add_argument(
         "-add_alarm", dest="add_alarm", action="store_true",
         help="Execute the am command to set the Android alarm.",
     )
-    alarm_mode.add_argument(
+    _ = alarm_mode.add_argument(
         "-add_alarm_debug", dest="add_alarm_debug", action="store_true",
         help="Print the am command to stdout without executing it.",
     )
