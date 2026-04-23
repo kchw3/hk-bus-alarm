@@ -332,7 +332,7 @@ python add_bus_schedule_to_calendar.py -seq N
 | `-calendar_id` | No | `primary` | Target Google Calendar ID. Use `'primary'` for your default calendar, or a calendar's email-style ID (e.g. `abc123@group.calendar.google.com`). |
 | `-credentials_file` | No | `credentials.json` | Path to the OAuth 2.0 client-secrets JSON from Google Cloud Console. |
 | `-token_file` | No | `token.json` | Path to the cached OAuth token file. |
-| `-duration_minutes` | No | `30` | Calendar event duration in minutes. |
+| `-duration_minutes` | No | `15` | Calendar event duration in minutes. |
 
 *Exactly one of `-add_event` / `-add_event_debug` is required.
 
@@ -361,7 +361,7 @@ Found schedule: 2026-04-21T14:32+08:00 (5m)
 Event details (not submitted to Google Calendar):
   Title    : Bus schedule
   Start    : 2026-04-21T14:32:00+08:00
-  End      : 2026-04-21T15:02:00+08:00
+  End      : 2026-04-21T14:47:00+08:00
   Calendar : primary
 
 Description:

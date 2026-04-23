@@ -7,6 +7,7 @@ Usage:
         [-route_id ROUTE_ID]
         [-search_schedule_tz TZ]
         [-alarm_label LABEL]
+        [-alarm_minutes_before_schedule N]
 
 Examples:
     # Set an alarm for the latest bus between 14:00–15:00 at stop 3
@@ -23,6 +24,11 @@ Examples:
     python set_alarm_with_bus_eta.py -seq 3 \\
         -search_schedule_from 14:00 -search_schedule_to 15:00 \\
         -add_alarm -alarm_label "Take bus 81"
+
+    # Set alarm 10 minutes before the found bus schedule
+    python set_alarm_with_bus_eta.py -seq 3 \\
+        -search_schedule_from 14:00 -search_schedule_to 15:00 \\
+        -alarm_minutes_before_schedule 10 -add_alarm
 
     # Different timezone
     python set_alarm_with_bus_eta.py -seq 3 \\
@@ -166,7 +172,8 @@ if __name__ == "__main__":
             "%(prog)s -seq N "
             "-search_schedule_from HH:MM -search_schedule_to HH:MM "
             "(-add_alarm | -add_alarm_debug) "
-            "[-route_id ROUTE_ID] [-search_schedule_tz TZ] [-alarm_label LABEL]"
+            "[-route_id ROUTE_ID] [-search_schedule_tz TZ] [-alarm_label LABEL] "
+            "[-alarm_default_time HH:MM] [-alarm_minutes_before_schedule N]"
         ),
     )
 
