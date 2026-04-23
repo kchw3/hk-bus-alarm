@@ -142,7 +142,7 @@ Finds the latest bus ETA within a time window for a given stop, then sets (or pr
 ```
 python set_alarm_with_bus_eta.py -seq N
     -search_schedule_from HH:MM -search_schedule_to HH:MM
-    (-add_alarm | -add_alarm_debug)
+    (-add_alarm | -add_alarm_debug | -add_alarm_ha)
     [-route_id ROUTE_ID]
     [-search_schedule_tz TZ]
     [-alarm_label LABEL]
@@ -157,8 +157,9 @@ python set_alarm_with_bus_eta.py -seq N
 | `-seq` | Yes | — | Stop number (1-based) to query. |
 | `-search_schedule_from` | Yes | — | Start of the time window (`HH:MM`). |
 | `-search_schedule_to` | Yes | — | End of the time window (`HH:MM`). Must be later than `-search_schedule_from`. |
-| `-add_alarm` | Yes* | — | Execute the `am` command to set the Android alarm. Mutually exclusive with `-add_alarm_debug`. |
-| `-add_alarm_debug` | Yes* | — | Print the `am` command to stdout without executing it. Mutually exclusive with `-add_alarm`. |
+| `-add_alarm` | Yes* | — | Execute the `am` command to set the Android alarm. Mutually exclusive with `-add_alarm_debug` and `-add_alarm_ha`. |
+| `-add_alarm_debug` | Yes* | — | Print the `am` command to stdout without executing it. Mutually exclusive with `-add_alarm` and `-add_alarm_ha`. |
+| `-add_alarm_ha` | Yes* | — | Home Assistant mode: print `FOUND:HH:MM` if a schedule was found, or `NOT_FOUND:HH:MM` using the fallback alarm time. No other output is produced. Mutually exclusive with `-add_alarm` and `-add_alarm_debug`. |
 | `-route_id` | No | `81+1+HIGH SPEED RAIL WEST KOWLOON STATION+WO CHE` | Full route ID string. |
 | `-search_schedule_tz` | No | `+08:00` | Timezone for the search window and default alarm time. Accepts `local` or a fixed offset like `+09:00` / `-05:00`. |
 | `-alarm_label` | No | `Bus schedule` | Label shown on the Android clock alarm. |
@@ -192,6 +193,12 @@ python set_alarm_with_bus_eta.py -seq 3 \
     -search_schedule_from 14:00 -search_schedule_to 15:00 \
     -alarm_minutes_before_schedule 10 \
     -add_alarm
+
+# Home Assistant mode: prints FOUND:14:32 or NOT_FOUND:13:00
+python set_alarm_with_bus_eta.py -seq 3 \
+    -search_schedule_from 14:00 -search_schedule_to 15:00 \
+    -alarm_default_time 13:00 \
+    -add_alarm_ha
 
 # Fall back to 13:00 if no bus is found in the window
 python set_alarm_with_bus_eta.py -seq 3 \

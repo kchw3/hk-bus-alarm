@@ -3,7 +3,7 @@
 Usage:
     python set_alarm_with_bus_eta.py -seq N
         -search_schedule_from HH:MM -search_schedule_to HH:MM
-        (-add_alarm | -add_alarm_debug)
+        (-add_alarm | -add_alarm_debug | -add_alarm_ha)
         [-route_id ROUTE_ID]
         [-search_schedule_tz TZ]
         [-alarm_label LABEL]
@@ -29,6 +29,11 @@ Examples:
     python set_alarm_with_bus_eta.py -seq 3 \\
         -search_schedule_from 14:00 -search_schedule_to 15:00 \\
         -alarm_minutes_before_schedule 10 -add_alarm
+
+    # Home Assistant mode: prints FOUND:HH:MM or NOT_FOUND:HH:MM only
+    python set_alarm_with_bus_eta.py -seq 3 \\
+        -search_schedule_from 14:00 -search_schedule_to 15:00 \\
+        -add_alarm_ha
 
     # Different timezone
     python set_alarm_with_bus_eta.py -seq 3 \\
@@ -76,21 +81,30 @@ def run(
     window: ScheduleWindow,
     alarm: AlarmConfig,
     *,
-    debug: bool,
+    mode: str,
 ) -> None:
-    """Fetch the latest bus ETA within the given window and set an Android alarm accordingly."""
-    print("Loading HK bus data (this may take a moment)…\n")
+    """Fetch the latest bus ETA within the given window and set an Android alarm accordingly.
+
+    mode: "execute" — set the alarm on device via am.
+          "debug"   — print the am command without executing.
+          "ha"      — print FOUND:HH:MM or NOT_FOUND:HH:MM only (for Home Assistant).
+    """
+    ha = (mode == "ha")
+
+    if not ha:
+        print("Loading HK bus data (this may take a moment)…\n")
     hketa = HKEta()
 
     route = hketa.route_list.get(query.route_id)
     if route is None:
-        print(f"Route not found: {query.route_id!r}")
-        bus_no = query.route_id.split("+")[0]
-        matches = [k for k in hketa.route_list if k.startswith(bus_no + "+")]
-        if matches:
-            print("Available routes containing that bus number:")
-            for m in matches[:20]:
-                print(f"  {m}")
+        if not ha:
+            print(f"Route not found: {query.route_id!r}")
+            bus_no = query.route_id.split("+")[0]
+            matches = [k for k in hketa.route_list if k.startswith(bus_no + "+")]
+            if matches:
+                print("Available routes containing that bus number:")
+                for m in matches[:20]:
+                    print(f"  {m}")
         sys.exit(1)
 
     stop_list = route.get("stops", {})
@@ -103,7 +117,8 @@ def run(
     total = len(all_stops)
 
     if query.seq < 1 or query.seq > total:
-        print(f"Error: -seq {query.seq} is out of range. Valid range is 1–{total}.")
+        if not ha:
+            print(f"Error: -seq {query.seq} is out of range. Valid range is 1–{total}.")
         sys.exit(1)
 
     co, stop_id = all_stops[query.seq - 1]
@@ -111,12 +126,14 @@ def run(
     name_en = stop_data.get("name", {}).get("en", "—")
     name_zh = stop_data.get("name", {}).get("zh", "—")
 
-    print(f"Stop {query.seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
+    if not ha:
+        print(f"Stop {query.seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
 
     try:
         etas = hketa.getEtas(route_id=query.route_id, seq=query.seq - 1, language="en")
     except Exception as exc:
-        print(f"Error fetching ETAs: {exc}")
+        if not ha:
+            print(f"Error fetching ETAs: {exc}")
         sys.exit(1)
 
     tz = window.schedule_tz
@@ -128,41 +145,52 @@ def run(
 
     if found is not None:
         found_dt = eta_to_datetime(found)
-        print(f"Found schedule: {format_eta_entry(found)}")
+        if not ha:
+            print(f"Found schedule: {format_eta_entry(found)}")
         alarm_dt = found_dt - timedelta(minutes=alarm.alarm_minutes_before)
-        if alarm.alarm_minutes_before:
+        if not ha and alarm.alarm_minutes_before:
             print(
                 f"Alarm adjusted {alarm.alarm_minutes_before}m before schedule: "
                 f"{alarm_dt.strftime('%H:%M')} {_offset(alarm_dt)}"
             )
     else:
         if alarm.alarm_default_time is None:
-            print(
-                f"No bus schedule found between "
-                f"{from_dt.strftime('%H:%M')} and {to_dt.strftime('%H:%M')} "
-                f"(tz {_offset(from_dt)})."
-            )
-            sys.exit(1)
-        alarm_dt = datetime.combine(today, alarm.alarm_default_time, tzinfo=tz)
-        print(
-            f"No bus schedule found between "
-            f"{from_dt.strftime('%H:%M')} and {to_dt.strftime('%H:%M')} "
-            f"(tz {_offset(from_dt)}). "
-            f"Using default alarm time: {alarm.alarm_default_time.strftime('%H:%M')} {_offset(alarm_dt)}"
-        )
+            alarm_dt = datetime.now(tz=tz)
+            if not ha:
+                print(
+                    f"No bus schedule found between "
+                    f"{from_dt.strftime('%H:%M')} and {to_dt.strftime('%H:%M')} "
+                    f"(tz {_offset(from_dt)}). "
+                    f"Setting alarm to {_MIN_ALARM_LEAD_MINUTES}m from now."
+                )
+        else:
+            alarm_dt = datetime.combine(today, alarm.alarm_default_time, tzinfo=tz)
+            if not ha:
+                print(
+                    f"No bus schedule found between "
+                    f"{from_dt.strftime('%H:%M')} and {to_dt.strftime('%H:%M')} "
+                    f"(tz {_offset(from_dt)}). "
+                    f"Using default alarm time: {alarm.alarm_default_time.strftime('%H:%M')} {_offset(alarm_dt)}"
+                )
 
     # Clamp: alarm must be at least _MIN_ALARM_LEAD_MINUTES from now
     min_alarm_dt = datetime.now(tz=tz) + timedelta(minutes=_MIN_ALARM_LEAD_MINUTES)
     if alarm_dt < min_alarm_dt:
-        print(
-            f"Alarm time {alarm_dt.strftime('%H:%M')} {_offset(alarm_dt)} is less than "
-            f"{_MIN_ALARM_LEAD_MINUTES}m from now; "
-            f"setting to {min_alarm_dt.strftime('%H:%M')} {_offset(min_alarm_dt)} instead."
-        )
+        if not ha:
+            print(
+                f"Alarm time {alarm_dt.strftime('%H:%M')} {_offset(alarm_dt)} is less than "
+                f"{_MIN_ALARM_LEAD_MINUTES}m from now; "
+                f"setting to {min_alarm_dt.strftime('%H:%M')} {_offset(min_alarm_dt)} instead."
+            )
         alarm_dt = min_alarm_dt
 
+    if ha:
+        status = "FOUND" if found is not None else "NOT_FOUND"
+        print(f"{status}:{alarm_dt.strftime('%H:%M')}")
+        return
+
     print()
-    set_android_alarm(alarm_dt, alarm.alarm_label, debug=debug)
+    set_android_alarm(alarm_dt, alarm.alarm_label, debug=(mode == "debug"))
 
 
 if __name__ == "__main__":
@@ -171,7 +199,7 @@ if __name__ == "__main__":
         usage=(
             "%(prog)s -seq N "
             "-search_schedule_from HH:MM -search_schedule_to HH:MM "
-            "(-add_alarm | -add_alarm_debug) "
+            "(-add_alarm | -add_alarm_debug | -add_alarm_ha) "
             "[-route_id ROUTE_ID] [-search_schedule_tz TZ] [-alarm_label LABEL] "
             "[-alarm_default_time HH:MM] [-alarm_minutes_before_schedule N]"
         ),
@@ -230,6 +258,13 @@ if __name__ == "__main__":
         "-add_alarm_debug", dest="add_alarm_debug", action="store_true",
         help="Print the am command to stdout without executing it.",
     )
+    _ = alarm_mode.add_argument(
+        "-add_alarm_ha", dest="add_alarm_ha", action="store_true",
+        help=(
+            "Home Assistant mode: print FOUND:HH:MM if a schedule was found, "
+            "or NOT_FOUND:HH:MM using the fallback alarm time. No other output."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -239,6 +274,13 @@ if __name__ == "__main__":
             f"must be later than -search_schedule_from "
             f"({args.search_schedule_from.strftime('%H:%M')})."
         )
+
+    if args.add_alarm_ha:
+        mode = "ha"
+    elif args.add_alarm_debug:
+        mode = "debug"
+    else:
+        mode = "execute"
 
     run(
         query=RouteQuery(route_id=args.route_id, seq=args.seq),
@@ -252,5 +294,5 @@ if __name__ == "__main__":
             alarm_default_time=args.alarm_default_time,
             alarm_minutes_before=args.alarm_minutes_before_schedule,
         ),
-        debug=args.add_alarm_debug,
+        mode=mode,
     )
