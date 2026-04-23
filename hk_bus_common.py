@@ -4,10 +4,24 @@ Shared utilities for HK bus ETA scripts.
 
 import re
 import argparse
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta, time as dtime
 
 
 DEFAULT_ROUTE_ID = "81+1+HIGH SPEED RAIL WEST KOWLOON STATION+WO CHE"
+
+
+@dataclass
+class RouteQuery:
+    route_id: str
+    seq: int
+
+
+@dataclass
+class ScheduleWindow:
+    schedule_from: dtime
+    schedule_to: dtime
+    schedule_tz: timezone | None
 
 
 # ---------------------------------------------------------------------------

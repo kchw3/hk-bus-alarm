@@ -36,12 +36,15 @@ Requires:
 
 import sys
 import argparse
+from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta, time as dtime
 
 from hk_bus_eta import HKEta
 
 from hk_bus_common import (
     DEFAULT_ROUTE_ID,
+    RouteQuery,
+    ScheduleWindow,
     _offset,
     eta_to_datetime,
     find_schedule,
@@ -55,26 +58,28 @@ from bus_alarm_lib import DEFAULT_ALARM_LABEL, set_android_alarm
 _MIN_ALARM_LEAD_MINUTES = 2
 
 
+@dataclass
+class AlarmConfig:
+    alarm_label: str
+    alarm_default_time: dtime | None
+    alarm_minutes_before: int
+
+
 def run(
-    route_id: str,
-    seq: int,
-    schedule_from: dtime,
-    schedule_to: dtime,
-    schedule_tz: timezone | None,
-    alarm_label: str,
+    query: RouteQuery,
+    window: ScheduleWindow,
+    alarm: AlarmConfig,
     *,
-    alarm_default_time: dtime | None = None,
-    alarm_minutes_before: int = 0,
     debug: bool,
 ) -> None:
     """Fetch the latest bus ETA within the given window and set an Android alarm accordingly."""
     print("Loading HK bus data (this may take a moment)…\n")
     hketa = HKEta()
 
-    route = hketa.route_list.get(route_id)
+    route = hketa.route_list.get(query.route_id)
     if route is None:
-        print(f"Route not found: {route_id!r}")
-        bus_no = route_id.split("+")[0]
+        print(f"Route not found: {query.route_id!r}")
+        bus_no = query.route_id.split("+")[0]
         matches = [k for k in hketa.route_list if k.startswith(bus_no + "+")]
         if matches:
             print("Available routes containing that bus number:")
@@ -91,53 +96,53 @@ def run(
     ]
     total = len(all_stops)
 
-    if seq < 1 or seq > total:
-        print(f"Error: -seq {seq} is out of range. Valid range is 1–{total}.")
+    if query.seq < 1 or query.seq > total:
+        print(f"Error: -seq {query.seq} is out of range. Valid range is 1–{total}.")
         sys.exit(1)
 
-    co, stop_id = all_stops[seq - 1]
+    co, stop_id = all_stops[query.seq - 1]
     stop_data = hketa.stop_list.get(stop_id, {})
     name_en = stop_data.get("name", {}).get("en", "—")
     name_zh = stop_data.get("name", {}).get("zh", "—")
 
-    print(f"Stop {seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
+    print(f"Stop {query.seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
 
     try:
-        etas = hketa.getEtas(route_id=route_id, seq=seq - 1, language="en")
+        etas = hketa.getEtas(route_id=query.route_id, seq=query.seq - 1, language="en")
     except Exception as exc:
         print(f"Error fetching ETAs: {exc}")
         sys.exit(1)
 
-    tz = schedule_tz if schedule_tz is not None else timezone(timedelta(hours=8))
+    tz = window.schedule_tz if window.schedule_tz is not None else timezone(timedelta(hours=8))
     today = date.today()
-    from_dt = datetime.combine(today, schedule_from, tzinfo=tz)
-    to_dt   = datetime.combine(today, schedule_to,   tzinfo=tz)
+    from_dt = datetime.combine(today, window.schedule_from, tzinfo=tz)
+    to_dt   = datetime.combine(today, window.schedule_to,   tzinfo=tz)
 
     found = find_schedule(etas, from_dt, to_dt)
 
     if found is not None:
         found_dt = eta_to_datetime(found)
         print(f"Found schedule: {format_eta_entry(found)}")
-        alarm_dt = found_dt - timedelta(minutes=alarm_minutes_before)
-        if alarm_minutes_before:
+        alarm_dt = found_dt - timedelta(minutes=alarm.alarm_minutes_before)
+        if alarm.alarm_minutes_before:
             print(
-                f"Alarm adjusted {alarm_minutes_before}m before schedule: "
+                f"Alarm adjusted {alarm.alarm_minutes_before}m before schedule: "
                 f"{alarm_dt.strftime('%H:%M')} {_offset(alarm_dt)}"
             )
     else:
-        if alarm_default_time is None:
+        if alarm.alarm_default_time is None:
             print(
                 f"No bus schedule found between "
                 f"{from_dt.strftime('%H:%M')} and {to_dt.strftime('%H:%M')} "
                 f"(tz {_offset(from_dt)})."
             )
             sys.exit(1)
-        alarm_dt = datetime.combine(today, alarm_default_time, tzinfo=tz)
+        alarm_dt = datetime.combine(today, alarm.alarm_default_time, tzinfo=tz)
         print(
             f"No bus schedule found between "
             f"{from_dt.strftime('%H:%M')} and {to_dt.strftime('%H:%M')} "
             f"(tz {_offset(from_dt)}). "
-            f"Using default alarm time: {alarm_default_time.strftime('%H:%M')} {_offset(alarm_dt)}"
+            f"Using default alarm time: {alarm.alarm_default_time.strftime('%H:%M')} {_offset(alarm_dt)}"
         )
 
     # Clamp: alarm must be at least _MIN_ALARM_LEAD_MINUTES from now
@@ -151,7 +156,7 @@ def run(
         alarm_dt = min_alarm_dt
 
     print()
-    set_android_alarm(alarm_dt, alarm_label, debug=debug)
+    set_android_alarm(alarm_dt, alarm.alarm_label, debug=debug)
 
 
 if __name__ == "__main__":
@@ -229,13 +234,16 @@ if __name__ == "__main__":
         )
 
     run(
-        route_id=args.route_id,
-        seq=args.seq,
-        schedule_from=args.search_schedule_from,
-        schedule_to=args.search_schedule_to,
-        schedule_tz=args.search_schedule_tz,
-        alarm_label=args.alarm_label,
-        alarm_default_time=args.alarm_default_time,
-        alarm_minutes_before=args.alarm_minutes_before_schedule,
+        query=RouteQuery(route_id=args.route_id, seq=args.seq),
+        window=ScheduleWindow(
+            schedule_from=args.search_schedule_from,
+            schedule_to=args.search_schedule_to,
+            schedule_tz=args.search_schedule_tz,
+        ),
+        alarm=AlarmConfig(
+            alarm_label=args.alarm_label,
+            alarm_default_time=args.alarm_default_time,
+            alarm_minutes_before=args.alarm_minutes_before_schedule,
+        ),
         debug=args.add_alarm_debug,
     )

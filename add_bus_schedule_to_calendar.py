@@ -40,12 +40,15 @@ Requires:
 
 import sys
 import argparse
+from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta, time as dtime
 
 from hk_bus_eta import HKEta
 
 from hk_bus_common import (
     DEFAULT_ROUTE_ID,
+    RouteQuery,
+    ScheduleWindow,
     _offset,
     eta_to_datetime,
     find_schedule,
@@ -60,6 +63,14 @@ DEFAULT_CALENDAR_ID = "primary"
 DEFAULT_CREDENTIALS_FILE = "credentials.json"
 DEFAULT_TOKEN_FILE = "token.json"
 DEFAULT_DURATION_MINUTES = 30
+
+
+@dataclass
+class CalendarConfig:
+    calendar_id: str
+    credentials_file: str
+    token_file: str
+    duration_minutes: int
 
 
 def build_event_description(
@@ -136,15 +147,9 @@ def build_event_description(
 
 
 def run(
-    route_id: str,
-    seq: int,
-    schedule_from: dtime,
-    schedule_to: dtime,
-    schedule_tz: timezone | None,
-    calendar_id: str,
-    credentials_file: str,
-    token_file: str,
-    duration_minutes: int,
+    query: RouteQuery,
+    window: ScheduleWindow,
+    calendar: CalendarConfig,
     *,
     debug: bool,
 ) -> None:
@@ -152,10 +157,10 @@ def run(
     print("Loading HK bus data (this may take a moment)…\n")
     hketa = HKEta()
 
-    route = hketa.route_list.get(route_id)
+    route = hketa.route_list.get(query.route_id)
     if route is None:
-        print(f"Route not found: {route_id!r}")
-        bus_no = route_id.split("+")[0]
+        print(f"Route not found: {query.route_id!r}")
+        bus_no = query.route_id.split("+")[0]
         matches = [k for k in hketa.route_list if k.startswith(bus_no + "+")]
         if matches:
             print("Available routes containing that bus number:")
@@ -172,27 +177,27 @@ def run(
     ]
     total = len(all_stops)
 
-    if seq < 1 or seq > total:
-        print(f"Error: -seq {seq} is out of range. Valid range is 1–{total}.")
+    if query.seq < 1 or query.seq > total:
+        print(f"Error: -seq {query.seq} is out of range. Valid range is 1–{total}.")
         sys.exit(1)
 
-    co, stop_id = all_stops[seq - 1]
+    co, stop_id = all_stops[query.seq - 1]
     stop_data = hketa.stop_list.get(stop_id, {})
     name_en = stop_data.get("name", {}).get("en", "—")
     name_zh = stop_data.get("name", {}).get("zh", "—")
 
-    print(f"Stop {seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
+    print(f"Stop {query.seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
 
     try:
-        etas = hketa.getEtas(route_id=route_id, seq=seq - 1, language="en")
+        etas = hketa.getEtas(route_id=query.route_id, seq=query.seq - 1, language="en")
     except Exception as exc:
         print(f"Error fetching ETAs: {exc}")
         sys.exit(1)
 
-    tz = schedule_tz if schedule_tz is not None else timezone(timedelta(hours=8))
+    tz = window.schedule_tz if window.schedule_tz is not None else timezone(timedelta(hours=8))
     today = date.today()
-    from_dt = datetime.combine(today, schedule_from, tzinfo=tz)
-    to_dt   = datetime.combine(today, schedule_to,   tzinfo=tz)
+    from_dt = datetime.combine(today, window.schedule_from, tzinfo=tz)
+    to_dt   = datetime.combine(today, window.schedule_to,   tzinfo=tz)
 
     found = find_schedule(etas, from_dt, to_dt)
 
@@ -209,9 +214,9 @@ def run(
         )
 
     description = build_event_description(
-        route_id=route_id,
+        route_id=query.route_id,
         route=route,
-        seq=seq,
+        seq=query.seq,
         total=total,
         co=co,
         stop_id=stop_id,
@@ -227,8 +232,8 @@ def run(
         print("Event details (not submitted to Google Calendar):")
         print(f"  Title    : {EVENT_SUMMARY}")
         print(f"  Start    : {found_dt.isoformat()}")
-        print(f"  End      : {(found_dt + timedelta(minutes=duration_minutes)).isoformat()}")
-        print(f"  Calendar : {calendar_id}")
+        print(f"  End      : {(found_dt + timedelta(minutes=calendar.duration_minutes)).isoformat()}")
+        print(f"  Calendar : {calendar.calendar_id}")
         print()
         print("Description:")
         print("-" * 50)
@@ -236,13 +241,13 @@ def run(
         print("-" * 50)
     else:
         print(f"Authenticating with Google Calendar…")
-        service = get_calendar_service(credentials_file, token_file)
+        service = get_calendar_service(calendar.credentials_file, calendar.token_file)
         event = create_calendar_event(
             service,
-            calendar_id=calendar_id,
+            calendar_id=calendar.calendar_id,
             summary=EVENT_SUMMARY,
             start_dt=found_dt,
-            duration_minutes=duration_minutes,
+            duration_minutes=calendar.duration_minutes,
             description=description,
         )
         print(f"Event created: {event.get('htmlLink')}")
@@ -334,14 +339,17 @@ if __name__ == "__main__":
         )
 
     run(
-        route_id=args.route_id,
-        seq=args.seq,
-        schedule_from=args.search_schedule_from,
-        schedule_to=args.search_schedule_to,
-        schedule_tz=args.search_schedule_tz,
-        calendar_id=args.calendar_id,
-        credentials_file=args.credentials_file,
-        token_file=args.token_file,
-        duration_minutes=args.duration_minutes,
+        query=RouteQuery(route_id=args.route_id, seq=args.seq),
+        window=ScheduleWindow(
+            schedule_from=args.search_schedule_from,
+            schedule_to=args.search_schedule_to,
+            schedule_tz=args.search_schedule_tz,
+        ),
+        calendar=CalendarConfig(
+            calendar_id=args.calendar_id,
+            credentials_file=args.credentials_file,
+            token_file=args.token_file,
+            duration_minutes=args.duration_minutes,
+        ),
         debug=args.add_event_debug,
     )
