@@ -148,6 +148,7 @@ def run(
     *,
     debug: bool,
 ) -> None:
+    """Fetch the latest bus ETA within the given window and add it as a Google Calendar event."""
     print("Loading HK bus data (this may take a moment)…\n")
     hketa = HKEta()
 
