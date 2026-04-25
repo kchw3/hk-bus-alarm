@@ -8,6 +8,7 @@ Usage:
         [-search_schedule_tz TZ]
         [-alarm_label LABEL]
         [-alarm_minutes_before_schedule N]
+        [-log_file PATH]
 
 Examples:
     # Set an alarm for the latest bus between 14:00–15:00 at stop 3
@@ -45,6 +46,8 @@ Requires:
     Android device with Termux (for -add_alarm)
 """
 
+import csv
+import os
 import sys
 import argparse
 from dataclasses import dataclass
@@ -68,6 +71,25 @@ from bus_alarm_lib import DEFAULT_ALARM_LABEL, set_android_alarm
 
 _MIN_ALARM_LEAD_MINUTES = 2
 
+_LOG_HEADER = ["timestamp", "route_id", "bus_schedule", "alarm_time", "reason"]
+
+
+def _write_log(
+    log_file: str,
+    timestamp: str,
+    route_id: str,
+    bus_schedule: str,
+    alarm_time: str,
+    reason: str,
+) -> None:
+    """Append one CSV row to log_file, writing the header when the file is new or empty."""
+    is_new = not os.path.exists(log_file) or os.path.getsize(log_file) == 0
+    with open(log_file, "a", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        if is_new:
+            writer.writerow(_LOG_HEADER)
+        writer.writerow([timestamp, route_id, bus_schedule, alarm_time, reason])
+
 
 @dataclass
 class AlarmConfig:
@@ -82,6 +104,7 @@ def run(
     alarm: AlarmConfig,
     *,
     mode: str,
+    log_file: str | None = None,
 ) -> None:
     """Fetch the latest bus ETA within the given window and set an Android alarm accordingly.
 
@@ -143,19 +166,29 @@ def run(
 
     found = find_schedule(etas, from_dt, to_dt)
 
+    # --- Determine initial alarm_dt and track log fields ---
+    schedule_detail = ""
+    alarm_reason = ""
+
     if found is not None:
         found_dt = eta_to_datetime(found)
+        schedule_detail = format_eta_entry(found)
         if not ha:
-            print(f"Found schedule: {format_eta_entry(found)}")
+            print(f"Found schedule: {schedule_detail}")
         alarm_dt = found_dt - timedelta(minutes=alarm.alarm_minutes_before)
-        if not ha and alarm.alarm_minutes_before:
-            print(
-                f"Alarm adjusted {alarm.alarm_minutes_before}m before schedule: "
-                f"{alarm_dt.strftime('%H:%M')} {_offset(alarm_dt)}"
-            )
+        if alarm.alarm_minutes_before:
+            alarm_reason = f"{alarm.alarm_minutes_before}m before schedule"
+            if not ha:
+                print(
+                    f"Alarm adjusted {alarm.alarm_minutes_before}m before schedule: "
+                    f"{alarm_dt.strftime('%H:%M')} {_offset(alarm_dt)}"
+                )
+        else:
+            alarm_reason = "at schedule time"
     else:
         if alarm.alarm_default_time is None:
             alarm_dt = datetime.now(tz=tz)
+            alarm_reason = "no schedule; set to now+2m"
             if not ha:
                 print(
                     f"No bus schedule found between "
@@ -165,6 +198,7 @@ def run(
                 )
         else:
             alarm_dt = datetime.combine(today, alarm.alarm_default_time, tzinfo=tz)
+            alarm_reason = "no schedule; fallback default"
             if not ha:
                 print(
                     f"No bus schedule found between "
@@ -173,7 +207,7 @@ def run(
                     f"Using default alarm time: {alarm.alarm_default_time.strftime('%H:%M')} {_offset(alarm_dt)}"
                 )
 
-    # Clamp: alarm must be at least _MIN_ALARM_LEAD_MINUTES from now
+    # --- Clamp: alarm must be at least _MIN_ALARM_LEAD_MINUTES from now ---
     min_alarm_dt = datetime.now(tz=tz) + timedelta(minutes=_MIN_ALARM_LEAD_MINUTES)
     if alarm_dt < min_alarm_dt:
         if not ha:
@@ -182,7 +216,21 @@ def run(
                 f"{_MIN_ALARM_LEAD_MINUTES}m from now; "
                 f"setting to {min_alarm_dt.strftime('%H:%M')} {_offset(min_alarm_dt)} instead."
             )
+        # Only append clamp suffix when the base reason doesn't already imply it
+        if alarm_reason != "no schedule; set to now+2m":
+            alarm_reason += "; clamped to now+2m"
         alarm_dt = min_alarm_dt
+
+    # --- Write log row ---
+    if log_file is not None:
+        _write_log(
+            log_file,
+            timestamp=datetime.now(tz=tz).isoformat(timespec="seconds"),
+            route_id=query.route_id,
+            bus_schedule=schedule_detail,
+            alarm_time=alarm_dt.strftime("%H:%M"),
+            reason=alarm_reason,
+        )
 
     if ha:
         status = "FOUND" if found is not None else "NOT_FOUND"
@@ -201,7 +249,7 @@ if __name__ == "__main__":
             "-search_schedule_from HH:MM -search_schedule_to HH:MM "
             "(-add_alarm | -add_alarm_debug | -add_alarm_ha) "
             "[-route_id ROUTE_ID] [-search_schedule_tz TZ] [-alarm_label LABEL] "
-            "[-alarm_default_time HH:MM] [-alarm_minutes_before_schedule N]"
+            "[-alarm_default_time HH:MM] [-alarm_minutes_before_schedule N] [-log_file PATH]"
         ),
     )
 
@@ -247,6 +295,16 @@ if __name__ == "__main__":
     _ = parser.add_argument(
         "-alarm_minutes_before_schedule", type=int, default=0, metavar="N",
         help="Set the alarm N minutes before the found bus schedule (default: 0).",
+    )
+
+    _ = parser.add_argument(
+        "-log_file", default=None, metavar="PATH",
+        help=(
+            "Path to a CSV log file. Each run appends one row "
+            "(timestamp, route_id, bus_schedule, alarm_time, reason). "
+            "Header is written automatically when the file is new or empty. "
+            "Logging is disabled if this argument is omitted."
+        ),
     )
 
     alarm_mode = parser.add_mutually_exclusive_group(required=True)
@@ -295,4 +353,5 @@ if __name__ == "__main__":
             alarm_minutes_before=args.alarm_minutes_before_schedule,
         ),
         mode=mode,
+        log_file=args.log_file,
     )

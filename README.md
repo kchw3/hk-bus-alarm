@@ -148,6 +148,7 @@ python set_alarm_with_bus_eta.py -seq N
     [-alarm_label LABEL]
     [-alarm_default_time HH:MM]
     [-alarm_minutes_before_schedule N]
+    [-log_file PATH]
 ```
 
 ### Parameters
@@ -163,16 +164,17 @@ python set_alarm_with_bus_eta.py -seq N
 | `-route_id` | No | `81+1+HIGH SPEED RAIL WEST KOWLOON STATION+WO CHE` | Full route ID string. |
 | `-search_schedule_tz` | No | `+08:00` | Timezone for the search window and default alarm time. Accepts `local` or a fixed offset like `+09:00` / `-05:00`. |
 | `-alarm_label` | No | `Bus schedule` | Label shown on the Android clock alarm. |
-| `-alarm_default_time` | No | — | Fallback alarm time (`HH:MM`) used when no bus schedule is found in the search window. Uses the same timezone as `-search_schedule_tz`. If omitted, the script exits with an error when no schedule is found. |
+| `-alarm_default_time` | No | — | Fallback alarm time (`HH:MM`) used when no bus schedule is found in the search window. Uses the same timezone as `-search_schedule_tz`. If omitted and no schedule is found, the alarm is set to `now + 2 minutes`. |
 | `-alarm_minutes_before_schedule` | No | `0` | Set the alarm this many minutes before the found schedule time. |
+| `-log_file` | No | — | Path to a CSV log file. Each run appends one row with `timestamp`, `route_id`, `bus_schedule`, `alarm_time`, and `reason`. The header is written automatically when the file is new or empty. Logging is disabled if omitted. |
 
-*Exactly one of `-add_alarm` / `-add_alarm_debug` is required.
+*Exactly one of `-add_alarm` / `-add_alarm_debug` / `-add_alarm_ha` is required.
 
 ### Alarm time resolution
 
 1. If a bus schedule is found in the window: `alarm_time = schedule_time − alarm_minutes_before_schedule`
 2. If no schedule is found and `-alarm_default_time` is set: `alarm_time = alarm_default_time`
-3. If no schedule is found and `-alarm_default_time` is not set: exits with an error.
+3. If no schedule is found and `-alarm_default_time` is not set: `alarm_time = now + 2 minutes`
 4. In all cases: if the computed `alarm_time` is less than 2 minutes from now, it is clamped to `now + 2 minutes`.
 
 ### Examples
@@ -212,6 +214,12 @@ python set_alarm_with_bus_eta.py -seq 3 \
     -search_schedule_tz +09:00 \
     -alarm_label "Take bus 81" \
     -add_alarm_debug
+
+# Log each run to a CSV file
+python set_alarm_with_bus_eta.py -seq 3 \
+    -search_schedule_from 14:00 -search_schedule_to 15:00 \
+    -log_file ~/bus_alarm.log \
+    -add_alarm
 ```
 
 ---
