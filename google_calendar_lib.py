@@ -8,8 +8,10 @@ Setup (one-time):
   1. Go to https://console.cloud.google.com/
   2. Create a project, enable the Google Calendar API.
   3. Create OAuth 2.0 credentials (Desktop app), download as credentials.json.
-  4. On first run, a browser window opens for user authorisation; the granted
-     token is saved to token_file for all subsequent runs.
+  4. On first run, the script prints an authorisation URL to the terminal.
+     Visit it on any device, approve access, then paste the returned code
+     back into the terminal. The granted token is saved to token_file for
+     all subsequent runs.
 
 Requires:
     pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
@@ -34,6 +36,16 @@ _SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 # Authentication
 # ---------------------------------------------------------------------------
 
+def _run_console_flow(credentials_file: str):
+    flow = InstalledAppFlow.from_client_secrets_file(credentials_file, _SCOPES)
+    flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+    auth_url, _ = flow.authorization_url()
+    print(f"\nOpen this URL in a browser on any device to authorise:\n\n  {auth_url}\n")
+    code = input("Enter the authorisation code: ").strip()
+    flow.fetch_token(code=code)
+    return flow.credentials
+
+
 def get_calendar_service(
     credentials_file: str = "credentials.json",
     token_file: str = "token.json",
@@ -46,9 +58,10 @@ def get_calendar_service(
     token_file       : path where the granted OAuth token is cached between
                        runs. Created automatically on first authorisation.
 
-    On the very first call the user is directed to a browser to approve access.
-    All subsequent calls load the cached token (refreshing it silently when it
-    expires).
+    On the very first call an authorisation URL is printed to the terminal.
+    Visit it on any device with a browser, approve access, then paste the
+    returned code back into the terminal. All subsequent calls load the cached
+    token (refreshing it silently when it expires).
     """
     creds = None
 
@@ -60,11 +73,9 @@ def get_calendar_service(
             try:
                 creds.refresh(Request())
             except Exception:
-                flow = InstalledAppFlow.from_client_secrets_file(credentials_file, _SCOPES)
-                creds = flow.run_local_server(port=0)
+                creds = _run_console_flow(credentials_file)
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_file, _SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = _run_console_flow(credentials_file)
         with open(token_file, "w") as fh:
             fh.write(creds.to_json())
 
