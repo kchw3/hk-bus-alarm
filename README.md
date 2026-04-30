@@ -234,7 +234,7 @@ Library for creating Google Calendar events timed to a bus schedule datetime. Au
 2. Create a project and enable the **Google Calendar API**.
 3. Under *APIs & Services → Credentials*, create an **OAuth 2.0 Client ID** (application type: *Desktop app*).
 4. Download the client-secrets file and save it as `credentials.json` (or any path you pass to the function).
-5. On first use the script prints an authorisation URL to the terminal. Visit it on any device with a browser, approve access, and Google will display an authorisation code — paste it back into the terminal prompt. The granted token is saved to `token.json` and reused (with silent refresh) on all subsequent calls.
+5. On first use the script prints an authorisation URL to the terminal. Visit it in any browser and approve access. Your browser will then try to redirect to `http://localhost:8080/` and fail to load — that is expected. Copy the full URL from the browser address bar and paste it into the terminal prompt. The granted token is saved to `token.json` and reused (with silent refresh) on all subsequent calls.
 
 ### Functions
 

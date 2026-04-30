@@ -9,9 +9,10 @@ Setup (one-time):
   2. Create a project, enable the Google Calendar API.
   3. Create OAuth 2.0 credentials (Desktop app), download as credentials.json.
   4. On first run, the script prints an authorisation URL to the terminal.
-     Visit it on any device, approve access, then paste the returned code
-     back into the terminal. The granted token is saved to token_file for
-     all subsequent runs.
+     Visit it in any browser, approve access. The browser will then try to
+     redirect to http://localhost:8080/ and fail — that is expected. Copy
+     the full URL from the address bar and paste it into the terminal prompt.
+     The granted token is saved to token_file for all subsequent runs.
 
 Requires:
     pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
@@ -38,11 +39,14 @@ _SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
 def _run_console_flow(credentials_file: str):
     flow = InstalledAppFlow.from_client_secrets_file(credentials_file, _SCOPES)
-    flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
-    auth_url, _ = flow.authorization_url()
+    flow.redirect_uri = "http://localhost:8080/"
+    auth_url, _ = flow.authorization_url(prompt="consent")
     print(f"\nOpen this URL in a browser on any device to authorise:\n\n  {auth_url}\n")
-    code = input("Enter the authorisation code: ").strip()
-    flow.fetch_token(code=code)
+    print("After approving, your browser will be redirected to http://localhost:8080/")
+    print("The page will fail to load — that is expected.")
+    print("Copy the full URL from the browser address bar and paste it below.\n")
+    redirect_url = input("Paste the full redirect URL: ").strip()
+    flow.fetch_token(authorization_response=redirect_url)
     return flow.credentials
 
 
@@ -59,9 +63,11 @@ def get_calendar_service(
                        runs. Created automatically on first authorisation.
 
     On the very first call an authorisation URL is printed to the terminal.
-    Visit it on any device with a browser, approve access, then paste the
-    returned code back into the terminal. All subsequent calls load the cached
-    token (refreshing it silently when it expires).
+    Visit it in any browser and approve access. The browser will then try to
+    redirect to http://localhost:8080/ and fail — that is expected. Copy the
+    full URL from the address bar and paste it into the terminal prompt. All
+    subsequent calls load the cached token (refreshing it silently when it
+    expires).
     """
     creds = None
 
