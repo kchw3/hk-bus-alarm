@@ -1,6 +1,6 @@
 # HK Bus Alarm
 
-A pair of command-line tools to query Hong Kong bus route stops and live ETAs, with the ability to set an Android alarm or create a Google Calendar event for a found bus schedule.
+A pair of command-line tools to query Hong Kong bus route stops and live ETAs, with the ability to set an Android alarm or create a Google Calendar event for a found bus schedule. Logged schedules can also be published as a public interactive chart (`web/`).
 
 ## Requirements
 
@@ -8,6 +8,7 @@ A pair of command-line tools to query Hong Kong bus route stops and live ETAs, w
 - [`hk-bus-eta`](https://pypi.org/project/hk-bus-eta/) library
 - Android device with Termux (required only for `set_alarm_with_bus_eta.py -add_alarm`)
 - Google Calendar API libraries (required only for `google_calendar_lib.py`)
+- Node.js 20+ and a Cloudflare account (required only for the `web/` chart)
 
 ```bash
 pip install hk-bus-eta
@@ -24,6 +25,9 @@ pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 | `bus_alarm_lib.py` | Android alarm library (`am start` command builder and executor) |
 | `google_calendar_lib.py` | Google Calendar library (OAuth2 auth, event creation) |
 | `add_bus_schedule_to_calendar.py` | CLI to find a bus schedule and create a Google Calendar event |
+| `bus_log_lib.py` | Schedule-log library (CSV row writer, ingest-endpoint uploader) |
+| `backfill_log.py` | CLI to upload an existing CSV log to the chart ingest endpoint |
+| `web/` | Cloudflare Worker + static page publishing the schedule history as a chart |
 
 ---
 
@@ -149,6 +153,7 @@ python set_alarm_with_bus_eta.py -seq N
     [-alarm_default_time HH:MM]
     [-alarm_minutes_before_schedule N]
     [-log_file PATH]
+    [-log_url URL] [-log_token TOKEN]
 ```
 
 ### Parameters
@@ -167,6 +172,8 @@ python set_alarm_with_bus_eta.py -seq N
 | `-alarm_default_time` | No | — | Fallback alarm time (`HH:MM`) used when no bus schedule is found in the search window. Uses the same timezone as `-search_schedule_tz`. If omitted and no schedule is found, the alarm is set to `now + 2 minutes`. |
 | `-alarm_minutes_before_schedule` | No | `0` | Set the alarm this many minutes before the found schedule time. |
 | `-log_file` | No | — | Path to a CSV log file. Each run appends one row with `timestamp`, `route_id`, `bus_schedule`, `alarm_time`, and `reason`. The header is written automatically when the file is new or empty. Logging is disabled if omitted. |
+| `-log_url` | No | — | Ingest endpoint of the chart (`https://<worker>.workers.dev/api/ingest`). Each run uploads the same record, plus the matched schedule as a full ISO timestamp. Independent of `-log_file` — either, both, or neither. Upload failures print a warning on stderr and never stop the alarm. |
+| `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token for `-log_url`. Prefer the environment variable, which keeps the token out of the process list. |
 
 *Exactly one of `-add_alarm` / `-add_alarm_debug` / `-add_alarm_ha` is required.
 
@@ -219,6 +226,14 @@ python set_alarm_with_bus_eta.py -seq 3 \
 python set_alarm_with_bus_eta.py -seq 3 \
     -search_schedule_from 14:00 -search_schedule_to 15:00 \
     -log_file ~/bus_alarm.log \
+    -add_alarm
+
+# Log locally and upload to the chart (token read from $BUS_LOG_TOKEN)
+export BUS_LOG_TOKEN='…'
+python set_alarm_with_bus_eta.py -seq 3 \
+    -search_schedule_from 14:00 -search_schedule_to 15:00 \
+    -log_file ~/bus_alarm.log \
+    -log_url https://hk-bus-alarm-chart.<subdomain>.workers.dev/api/ingest \
     -add_alarm
 ```
 
@@ -431,6 +446,115 @@ python add_bus_schedule_to_calendar.py -seq 3 \
     -search_schedule_from 14:00 -search_schedule_to 15:00 \
     -credentials_file ~/my_creds.json -duration_minutes 60 \
     -add_event_debug
+```
+
+---
+
+## bus_log_lib.py
+
+Shared logging layer used by `set_alarm_with_bus_eta.py` and `backfill_log.py`. One record type feeds two sinks.
+
+### `LogRecord`
+
+| Field | Description |
+|---|---|
+| `timestamp` | ISO 8601 run time, e.g. `2026-08-17T06:29:05+08:00`. |
+| `route_id` | Full route ID string. |
+| `bus_schedule` | Human-readable matched schedule, e.g. `2026-08-17T07:26+08:00 (57m)`. Empty when none was found. |
+| `alarm_time` | `HH:MM` the alarm was set to. |
+| `reason` | Why that alarm time was chosen, e.g. `30m before schedule; clamped to now+2m`. |
+| `eta_iso` | Matched schedule as a full ISO 8601 timestamp. Uploaded only — deliberately **not** written to the CSV, so the on-device log format is unchanged. |
+
+### Functions
+
+| Function | Description |
+|---|---|
+| `write_log_csv(log_file, record)` | Appends the record as a CSV row, writing the header when the file is new or empty. |
+| `post_record(url, token, record)` | Uploads one record to the ingest endpoint. Returns `True`/`False`; never raises. |
+| `post_records(url, token, records)` | Uploads a batch (JSON array). Returns `True`/`False`; never raises. |
+| `resolve_token(token)` | Returns `token`, falling back to `$BUS_LOG_TOKEN`. |
+
+Upload failures print one warning line to **stderr** and are swallowed — a network problem can never stop an alarm from being set, and `-add_alarm_ha` keeps its single-line stdout contract.
+
+---
+
+## backfill_log.py
+
+Uploads an existing CSV log to the chart so historical runs appear alongside new ones. `eta_iso` is reconstructed from the `bus_schedule` column. Rows with no schedule are skipped, and ingest is idempotent (`ts` + `route_id` is the primary key), so re-running is safe.
+
+### Usage
+
+```
+python backfill_log.py LOG_FILE -log_url URL [-log_token TOKEN] [-batch_size N] [-dry_run]
+```
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `LOG_FILE` | Yes | — | Path to the CSV log file. |
+| `-log_url` | Yes | — | Ingest endpoint. |
+| `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token. |
+| `-batch_size` | No | `100` | Records per POST request. |
+| `-dry_run` | No | off | Print what would be sent without contacting the endpoint. |
+
+```bash
+python backfill_log.py 81.log -log_url https://<worker>.workers.dev/api/ingest -dry_run
+python backfill_log.py 81.log -log_url https://<worker>.workers.dev/api/ingest
+```
+
+---
+
+## web/ — schedule history chart
+
+A Cloudflare Worker that stores uploaded records in D1 and serves a public, no-login, interactive chart of them.
+
+- **x** — date
+- **y** — time of day
+- **points** — the schedule selected by `find_schedule()` (the latest ETA inside the search window) at each run
+- **line** — the final schedule logged on each date, i.e. the one the alarm acted on, joined across dates
+- Every poll of the day can be shown as faint `×` markers via the checkbox, routes are colour-coded with a legend, and a table view is available underneath.
+
+### Layout
+
+| Path | Purpose |
+|---|---|
+| `web/wrangler.jsonc` | Worker config: static assets, D1 binding |
+| `web/schema.sql` | `schedule_log` table |
+| `web/src/index.js` | `POST /api/ingest`, `GET /api/data.json`, static assets |
+| `web/public/` | `index.html`, `app.js`, vendored `plotly-basic.min.js` |
+
+### API
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `POST /api/ingest` | `Authorization: Bearer <INGEST_TOKEN>` | Accepts one record object or an array (max 500, 256 KB). Upserts on `(timestamp, route_id)`. |
+| `GET /api/data.json` | None | All records with a schedule, oldest first. Optional `?days=N` and `?route=<route_id>`. Cached 60s. |
+
+### Deploy
+
+```bash
+cd web
+npm install
+
+# 1. Create the database and copy the printed database_id into wrangler.jsonc
+npx wrangler d1 create hk-bus-alarm
+
+# 2. Create the table
+npx wrangler d1 execute hk-bus-alarm --remote --file ./schema.sql
+
+# 3. Set the upload token (the same value the device sends as $BUS_LOG_TOKEN)
+npx wrangler secret put INGEST_TOKEN
+
+# 4. Deploy — prints the public https://<name>.<subdomain>.workers.dev URL
+npx wrangler deploy
+```
+
+### Local development
+
+```bash
+cd web
+printf 'INGEST_TOKEN=dev-token\n' > .dev.vars      # gitignored
+npx wrangler d1 execute hk-bus-alarm --local --file ./schema.sql
+npx wrangler dev                                    # http://localhost:8787
 ```
 
 ---
