@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HK Bus Schedule History</title>
+<style>
+  /* Palette roles (dataviz reference palette). Dark mode is a selected set of
+     steps for the dark surface, not an automatic flip. */
+  :root {
+    color-scheme: light;
+    --surface-0: #f4f3f0;
+    --surface-1: #fcfcfb;
+    --border:    #dcdbd5;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #78766f;
+    --grid: #e6e5e0;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #4a3aa7;
+    --series-8: #e34948;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-0: #111110;
+      --surface-1: #1a1a19;
+      --border:    #383734;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #97958b;
+      --grid: #2b2b29;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-6: #008300;
+      --series-7: #9085e9;
+      --series-8: #e66767;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 24px 20px 48px;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  .wrap { max-width: 1100px; margin: 0 auto; }
+
+  header { margin-bottom: 20px; }
+  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+  .sub { margin: 0; color: var(--text-secondary); font-size: 14px; }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    margin: 16px 0 12px;
+  }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    appearance: none;
+    border: 0;
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--surface-1);
+    cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-secondary); }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 12px 4px;
+  }
+  #chart { width: 100%; height: 520px; }
+
+  .msg { padding: 48px 16px; text-align: center; color: var(--text-secondary); }
+  .msg.error { color: var(--series-8); }
+
+  details { margin-top: 20px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 14px; }
+  .tablewrap { overflow-x: auto; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  td.dim { color: var(--text-muted); }
+
+  footer { margin-top: 24px; color: var(--text-muted); font-size: 12px; }
+  code { font-size: 12px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>HK Bus Schedule History</h1>
+      <p class="sub" id="subtitle">Loading…</p>
+    </header>
+
+    <div class="controls" hidden id="controls">
+      <div class="seg" role="group" aria-label="Date range">
+        <button type="button" data-days="7" aria-pressed="false">7 days</button>
+        <button type="button" data-days="30" aria-pressed="false">30 days</button>
+        <button type="button" data-days="0" aria-pressed="true">All</button>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="showPolls">
+        Show every poll, not just the final schedule of each day
+      </label>
+    </div>
+
+    <div class="card">
+      <div id="chart"></div>
+      <div class="msg" id="message">Loading schedule history…</div>
+    </div>
+
+    <details id="tableView" hidden>
+      <summary>Table view</summary>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th><th>Route</th><th>Schedule</th><th>Alarm</th><th>Polls</th><th>Logged at</th><th>Reason</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </details>
+
+    <footer>
+      Each point is the schedule selected by <code>find_schedule()</code> — the latest
+      ETA inside the search window — as logged by <code>set_alarm_with_bus_eta.py</code>.
+    </footer>
+  </div>
+
+  <script src="./vendor/plotly-basic.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

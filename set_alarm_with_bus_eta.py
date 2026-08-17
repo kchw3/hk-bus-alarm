@@ -9,6 +9,7 @@ Usage:
         [-alarm_label LABEL]
         [-alarm_minutes_before_schedule N]
         [-log_file PATH]
+        [-log_url URL] [-log_token TOKEN]
 
 Examples:
     # Set an alarm for the latest bus between 14:00–15:00 at stop 3
@@ -36,6 +37,12 @@ Examples:
         -search_schedule_from 14:00 -search_schedule_to 15:00 \\
         -add_alarm_ha
 
+    # Also upload each run to the chart ingest endpoint (token from $BUS_LOG_TOKEN)
+    python set_alarm_with_bus_eta.py -seq 3 \\
+        -search_schedule_from 14:00 -search_schedule_to 15:00 \\
+        -log_url https://<worker>.workers.dev/api/ingest \\
+        -add_alarm
+
     # Different timezone
     python set_alarm_with_bus_eta.py -seq 3 \\
         -search_schedule_from 15:00 -search_schedule_to 16:00 \\
@@ -46,8 +53,6 @@ Requires:
     Android device with Termux (for -add_alarm)
 """
 
-import csv
-import os
 import sys
 import argparse
 from dataclasses import dataclass
@@ -67,28 +72,10 @@ from hk_bus_common import (
     parse_tz,
 )
 from bus_alarm_lib import DEFAULT_ALARM_LABEL, set_android_alarm
+from bus_log_lib import LOG_TOKEN_ENV, LogRecord, post_record, write_log_csv
 
 
 _MIN_ALARM_LEAD_MINUTES = 2
-
-_LOG_HEADER = ["timestamp", "route_id", "bus_schedule", "alarm_time", "reason"]
-
-
-def _write_log(
-    log_file: str,
-    timestamp: str,
-    route_id: str,
-    bus_schedule: str,
-    alarm_time: str,
-    reason: str,
-) -> None:
-    """Append one CSV row to log_file, writing the header when the file is new or empty."""
-    is_new = not os.path.exists(log_file) or os.path.getsize(log_file) == 0
-    with open(log_file, "a", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        if is_new:
-            writer.writerow(_LOG_HEADER)
-        writer.writerow([timestamp, route_id, bus_schedule, alarm_time, reason])
 
 
 @dataclass
@@ -105,6 +92,8 @@ def run(
     *,
     mode: str,
     log_file: str | None = None,
+    log_url: str | None = None,
+    log_token: str | None = None,
 ) -> None:
     """Fetch the latest bus ETA within the given window and set an Android alarm accordingly.
 
@@ -168,11 +157,13 @@ def run(
 
     # --- Determine initial alarm_dt and track log fields ---
     schedule_detail = ""
+    schedule_eta_iso = ""
     alarm_reason = ""
 
     if found is not None:
         found_dt = eta_to_datetime(found)
         schedule_detail = format_eta_entry(found)
+        schedule_eta_iso = found_dt.isoformat(timespec="seconds")
         if not ha:
             print(f"Found schedule: {schedule_detail}")
         alarm_dt = found_dt - timedelta(minutes=alarm.alarm_minutes_before)
@@ -221,16 +212,21 @@ def run(
             alarm_reason += "; clamped to now+2m"
         alarm_dt = min_alarm_dt
 
-    # --- Write log row ---
-    if log_file is not None:
-        _write_log(
-            log_file,
+    # --- Write / upload log row ---
+    if log_file is not None or log_url is not None:
+        record = LogRecord(
             timestamp=datetime.now(tz=tz).isoformat(timespec="seconds"),
             route_id=query.route_id,
             bus_schedule=schedule_detail,
             alarm_time=alarm_dt.strftime("%H:%M"),
             reason=alarm_reason,
+            eta_iso=schedule_eta_iso,
         )
+        if log_file is not None:
+            write_log_csv(log_file, record)
+        if log_url is not None:
+            # Best-effort: upload failures warn on stderr and never stop the alarm.
+            post_record(log_url, log_token, record)
 
     if ha:
         status = "FOUND" if found is not None else "NOT_FOUND"
@@ -249,7 +245,8 @@ if __name__ == "__main__":
             "-search_schedule_from HH:MM -search_schedule_to HH:MM "
             "(-add_alarm | -add_alarm_debug | -add_alarm_ha) "
             "[-route_id ROUTE_ID] [-search_schedule_tz TZ] [-alarm_label LABEL] "
-            "[-alarm_default_time HH:MM] [-alarm_minutes_before_schedule N] [-log_file PATH]"
+            "[-alarm_default_time HH:MM] [-alarm_minutes_before_schedule N] "
+            "[-log_file PATH] [-log_url URL] [-log_token TOKEN]"
         ),
     )
 
@@ -306,6 +303,21 @@ if __name__ == "__main__":
             "Logging is disabled if this argument is omitted."
         ),
     )
+    _ = parser.add_argument(
+        "-log_url", default=None, metavar="URL",
+        help=(
+            "Ingest endpoint of the schedule chart (e.g. "
+            "https://<worker>.workers.dev/api/ingest). Each run uploads one record. "
+            "Independent of -log_file; upload failures only warn and never stop the alarm."
+        ),
+    )
+    _ = parser.add_argument(
+        "-log_token", default=None, metavar="TOKEN",
+        help=(
+            f"Bearer token for -log_url. Defaults to the {LOG_TOKEN_ENV} environment "
+            "variable, which keeps the token out of the process list."
+        ),
+    )
 
     alarm_mode = parser.add_mutually_exclusive_group(required=True)
     _ = alarm_mode.add_argument(
@@ -354,4 +366,6 @@ if __name__ == "__main__":
         ),
         mode=mode,
         log_file=args.log_file,
+        log_url=args.log_url,
+        log_token=args.log_token,
     )

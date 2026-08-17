@@ -1,0 +1,16 @@
+{
+  "name": "hk-bus-alarm-chart",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive chart of HK bus schedule history logged by set_alarm_with_bus_eta.py",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init:local": "wrangler d1 execute hk-bus-alarm --local --file ./schema.sql",
+    "db:init:remote": "wrangler d1 execute hk-bus-alarm --remote --file ./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.123.0"
+  }
+}

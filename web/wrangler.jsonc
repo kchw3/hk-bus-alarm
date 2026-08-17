@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "hk-bus-alarm-chart",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+
+  // Static chart page. Assets are matched first; only unmatched paths
+  // (i.e. /api/*) reach the Worker.
+  "assets": {
+    "directory": "./public",
+    "html_handling": "auto-trailing-slash",
+    // Unknown paths fall through to the Worker, which answers a JSON 404.
+    "not_found_handling": "none"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hk-bus-alarm",
+      // Fill in with the id printed by `wrangler d1 create hk-bus-alarm`.
+      "database_id": "REPLACE_WITH_DATABASE_ID"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+
+  // INGEST_TOKEN is a secret, never a var:
+  //   wrangler secret put INGEST_TOKEN          (production)
+  //   echo 'INGEST_TOKEN=dev-token' > .dev.vars (local `wrangler dev`)
+}

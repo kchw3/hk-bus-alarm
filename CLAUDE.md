@@ -29,6 +29,21 @@ python bus_route_info.py -seq 3 -search_schedule_from 14:00 -search_schedule_to 
 python bus_route_info.py -seq 3 -search_schedule_from 14:00 -search_schedule_to 15:00 -search_schedule_tz local
 ```
 
+## Schedule history chart (`web/`)
+
+```
+set_alarm_with_bus_eta.py --POST /api/ingest--> Worker --> D1 (schedule_log)
+        |                                          |
+        +-- also appends the local CSV             +-- GET /api/data.json (public)
+                                                   +-- static page: Plotly chart
+```
+
+- **Upload** — `bus_log_lib.py` holds `LogRecord` plus both sinks (`write_log_csv`, `post_record`). Uploads are best-effort: failures warn on stderr and never affect the alarm. `backfill_log.py` replays an existing CSV into the same endpoint.
+- **Worker** (`web/src/index.js`) — bearer-token ingest, public read endpoint, static assets. D1 upserts on `(ts, route_id)` so re-ingest is idempotent; `ts_epoch`/`eta_epoch` columns exist so ordering and `?days=` filtering stay correct regardless of UTC offset.
+- **Chart** (`web/public/app.js`) — x is the calendar date, y is time of day plotted on a fixed dummy day (`1970-01-01 HH:MM:SS`) so Plotly's date axis can format `%H:%M`. Timestamps are split with a regex, never `new Date()`, so a `+08:00` bus is not re-expressed in the viewer's timezone. Points come straight from `find_schedule()`; the line follows the last record of each date.
+
+Deployment steps and API details are in README.md.
+
 ## Architecture
 
 Single-file script (`bus_route_info.py`). Key layers:
