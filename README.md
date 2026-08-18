@@ -172,7 +172,7 @@ python set_alarm_with_bus_eta.py -seq N
 | `-alarm_default_time` | No | — | Fallback alarm time (`HH:MM`) used when no bus schedule is found in the search window. Uses the same timezone as `-search_schedule_tz`. If omitted and no schedule is found, the alarm is set to `now + 2 minutes`. |
 | `-alarm_minutes_before_schedule` | No | `0` | Set the alarm this many minutes before the found schedule time. |
 | `-log_file` | No | — | Path to a CSV log file. Each run appends one row with `timestamp`, `route_id`, `bus_schedule`, `alarm_time`, and `reason`. The header is written automatically when the file is new or empty. Logging is disabled if omitted. |
-| `-log_url` | No | — | Ingest endpoint of the chart (`https://<worker>.workers.dev/api/ingest`). Each run uploads the same record, plus the matched schedule as a full ISO timestamp. Independent of `-log_file` — either, both, or neither. Upload failures print a warning on stderr and never stop the alarm. |
+| `-log_url` | No | — | Ingest endpoint of the chart (`https://<worker>.workers.dev/api/ingest`). Each run uploads the same record, plus the matched schedule as a full ISO timestamp. Independent of `-log_file`, but **use both**: the CSV row is written first, so a failed upload stays replayable via `backfill_log.py`. Upload failures print a warning on stderr and never stop the alarm. |
 | `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token for `-log_url`. Prefer the environment variable, which keeps the token out of the process list. |
 
 *Exactly one of `-add_alarm` / `-add_alarm_debug` / `-add_alarm_ha` is required.
@@ -529,24 +529,74 @@ A Cloudflare Worker that stores uploaded records in D1 and serves a public, no-l
 | `POST /api/ingest` | `Authorization: Bearer <INGEST_TOKEN>` | Accepts one record object or an array (max 500, 256 KB). Upserts on `(timestamp, route_id)`. |
 | `GET /api/data.json` | None | All records with a schedule, oldest first. Optional `?days=N` and `?route=<route_id>`. Cached 60s. |
 
-### Deploy
+### Storage: why D1 and not KV
 
-```bash
-cd web
-npm install
+Records go into **D1** (Cloudflare's SQLite). The workload is tiny — ~17 rows per day per route, about 1.5 MB a year — so KV would also cope, but D1 gives three things for free that KV would make you write by hand:
 
-# 1. Create the database and copy the printed database_id into wrangler.jsonc
-npx wrangler d1 create hk-bus-alarm
+| Need | D1 | KV |
+|---|---|---|
+| Duplicate suppression | `ON CONFLICT (ts, route_id) DO UPDATE` | scan the blob on every write |
+| `?days=` filter and ordering | `WHERE ts_epoch >= ? ORDER BY` | filter/sort the whole array in code |
+| Concurrent writes | one row per record | read-modify-write of one blob; overlapping writes lose data |
+| Freshness | reads hit the primary, so a new row shows immediately | eventually consistent, up to ~60s |
 
-# 2. Create the table
-npx wrangler d1 execute hk-bus-alarm --remote --file ./schema.sql
+Both are free at this volume. If you ever want to switch, only `web/src/index.js` and `web/schema.sql` change — the device scripts and the chart page only speak the JSON API.
 
-# 3. Set the upload token (the same value the device sends as $BUS_LOG_TOKEN)
-npx wrangler secret put INGEST_TOKEN
+### One-time Cloudflare setup
 
-# 4. Deploy — prints the public https://<name>.<subdomain>.workers.dev URL
-npx wrangler deploy
-```
+1. Create a free account at [dash.cloudflare.com/sign-up](https://dash.cloudflare.com/sign-up). No domain and no paid plan are needed — the Worker is served on a free `*.workers.dev` subdomain.
+2. Install the tooling and sign in. `wrangler login` opens a browser to authorise the CLI; on a headless box use `wrangler login --browser false` and open the printed URL, or set `CLOUDFLARE_API_TOKEN` instead.
+
+   ```bash
+   cd web
+   npm install
+   npx wrangler login
+   npx wrangler whoami        # confirms which account you are deploying to
+   ```
+
+3. Create the D1 database. The command prints a `database_id` — paste it into the `d1_databases` block of `web/wrangler.jsonc`, replacing `REPLACE_WITH_DATABASE_ID`.
+
+   ```bash
+   npx wrangler d1 create hk-bus-alarm
+   ```
+
+4. Create the table in the remote database.
+
+   ```bash
+   npx wrangler d1 execute hk-bus-alarm --remote --file ./schema.sql
+   ```
+
+5. Set the upload token. Choose any long random string (`openssl rand -base64 32`); Wrangler prompts for the value so it never lands in your shell history. This is the same value the device sends as `$BUS_LOG_TOKEN`.
+
+   ```bash
+   npx wrangler secret put INGEST_TOKEN
+   ```
+
+6. Deploy. The output includes the public URL, e.g. `https://hk-bus-alarm-chart.<subdomain>.workers.dev`.
+
+   ```bash
+   npx wrangler deploy
+   ```
+
+7. Point the device at it, and load the URL in a browser to see the chart.
+
+   ```bash
+   export BUS_LOG_TOKEN='<the token from step 5>'
+   python set_alarm_with_bus_eta.py -seq 3 \
+       -search_schedule_from 06:00 -search_schedule_to 08:00 \
+       -log_file ~/bus_alarm.log \
+       -log_url https://hk-bus-alarm-chart.<subdomain>.workers.dev/api/ingest \
+       -add_alarm
+   ```
+
+8. Optionally load the history you already have:
+
+   ```bash
+   python backfill_log.py ~/bus_alarm.log \
+       -log_url https://hk-bus-alarm-chart.<subdomain>.workers.dev/api/ingest
+   ```
+
+Later deploys are just `npx wrangler deploy`; steps 3–5 are one-time. To see live request logs, run `npx wrangler tail`.
 
 ### Local development
 
@@ -556,6 +606,25 @@ printf 'INGEST_TOKEN=dev-token\n' > .dev.vars      # gitignored
 npx wrangler d1 execute hk-bus-alarm --local --file ./schema.sql
 npx wrangler dev                                    # http://localhost:8787
 ```
+
+### Upload failures and recovery
+
+Logging is secondary to setting the alarm, so `set_alarm_with_bus_eta.py` never fails or blocks because of it:
+
+- The local CSV row is written **before** the upload is attempted, so a failed upload always leaves a replayable copy on the device.
+- A failed upload (endpoint down, no network, wrong token, non-2xx response) prints a warning on **stderr** and the run continues. The exit code stays `0`, the alarm is still set, and `-add_alarm_ha` still prints only its single `FOUND:HH:MM` / `NOT_FOUND:HH:MM` line on stdout.
+- A failed *local write* (unwritable path, full disk) is also only a warning — the upload and the alarm still proceed.
+- The warning names the log file and the exact replay command:
+
+  ```
+  Warning: schedule log upload failed: <urlopen error [Errno 111] Connection refused>
+           The record is still in ~/bus_alarm.log; upload it later with:
+             python backfill_log.py ~/bus_alarm.log -log_url https://<worker>.workers.dev/api/ingest
+  ```
+
+- Replaying is safe and repeatable: ingest upserts on `(timestamp, route_id)`, so re-sending rows that already arrived changes nothing. There is no need to track which rows failed — just re-run `backfill_log.py` over the whole file.
+
+Because of this, **use `-log_file` together with `-log_url`**. With `-log_url` alone there is no local copy, so a failed upload is lost for good — the script warns when that happens.
 
 ---
 
