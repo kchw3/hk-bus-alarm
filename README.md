@@ -598,6 +598,34 @@ Both are free at this volume. If you ever want to switch, only `web/src/index.js
 
 Later deploys are just `npx wrangler deploy`; steps 3–5 are one-time. To see live request logs, run `npx wrangler tail`.
 
+### Custom domain
+
+To serve the chart from your own hostname instead of `*.workers.dev`, add a route to `web/wrangler.jsonc` and redeploy:
+
+```jsonc
+"routes": [
+  { "pattern": "bus.example.com", "custom_domain": true }
+]
+```
+
+```bash
+npx wrangler deploy
+```
+
+The zone must already be active on the same Cloudflare account, and the hostname must not already have a CNAME record. Wrangler creates the DNS record and the certificate.
+
+Only the host changes — the paths are the same:
+
+| | Default | Custom domain |
+|---|---|---|
+| Chart | `https://hk-bus-alarm-chart.<subdomain>.workers.dev/` | `https://bus.example.com/` |
+| `-log_url` | `https://…workers.dev/api/ingest` | `https://bus.example.com/api/ingest` |
+| Data | `https://…workers.dev/api/data.json` | `https://bus.example.com/api/data.json` |
+
+No code changes are needed: a Custom Domain routes every path on the hostname to the Worker, and the page requests its data relatively. The ingest token is unchanged, and the `*.workers.dev` URL keeps working alongside the custom domain — add `"workers_dev": false` to the config to retire it.
+
+**Use a whole hostname, not a subpath.** A route pattern such as `example.com/bus/*` will not work as-is: the Worker matches `/api/ingest` and `/api/data.json` exactly, so requests would arrive as `/bus/api/ingest` and fall through to the 404, and the static assets would not resolve either. Supporting a subpath means stripping the prefix in `web/src/index.js` and setting a `<base>` in `index.html`.
+
 ### Local development
 
 ```bash

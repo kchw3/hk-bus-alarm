@@ -26,6 +26,17 @@
     "enabled": true
   }
 
+  // Serving the chart from your own domain: uncomment, set the hostname, and
+  // redeploy. The zone must already be active on this Cloudflare account;
+  // Wrangler then creates the DNS record and certificate. A Custom Domain
+  // covers every path on that hostname, so no code changes are needed — the
+  // ingest endpoint simply becomes https://<hostname>/api/ingest. Add
+  // "workers_dev": false alongside it to retire the *.workers.dev URL.
+  //
+  // "routes": [
+  //   { "pattern": "bus.example.com", "custom_domain": true }
+  // ]
+
   // INGEST_TOKEN is a secret, never a var:
   //   wrangler secret put INGEST_TOKEN          (production)
   //   echo 'INGEST_TOKEN=dev-token' > .dev.vars (local `wrangler dev`)
