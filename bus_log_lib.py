@@ -20,6 +20,11 @@ from dataclasses import dataclass
 #: Environment variable consulted when no token is passed on the command line.
 LOG_TOKEN_ENV = "BUS_LOG_TOKEN"
 
+#: Sent on every upload. urllib's default ("Python-urllib/3.x") is on Cloudflare's
+#: Browser Integrity Check blocklist, which rejects the request with HTTP 403
+#: "error code: 1010" before it ever reaches the Worker.
+USER_AGENT = "hk-bus-alarm/1.0 (+https://github.com/kchw3/hk-bus-alarm)"
+
 #: Column order of the CSV log. Unchanged from the original implementation.
 CSV_HEADER = ["timestamp", "route_id", "bus_schedule", "alarm_time", "reason"]
 
@@ -79,6 +84,19 @@ def resolve_token(token: str | None) -> str:
     return token if token else os.environ.get(LOG_TOKEN_ENV, "")
 
 
+def _body_hint(response, limit: int = 200) -> str:
+    """Return a short ' Response: …' suffix for an error body, or '' if unreadable.
+
+    The body is what distinguishes a Worker rejection ('{"error":"unauthorized"}')
+    from an edge one ('error code: 1010'), so it is worth surfacing.
+    """
+    try:
+        text = response.read(limit).decode("utf-8", "replace").strip()
+    except Exception:  # pylint: disable=broad-except
+        return ""
+    return f" Response: {text}" if text else ""
+
+
 def post_records(
     url: str,
     token: str | None,
@@ -101,7 +119,7 @@ def post_records(
         url,
         data=body,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
     )
     auth_token = resolve_token(token)
     if auth_token:
@@ -117,7 +135,8 @@ def post_records(
             )
     except urllib.error.HTTPError as exc:
         print(
-            f"Warning: schedule log upload failed with HTTP {exc.code} ({exc.reason}).",
+            f"Warning: schedule log upload failed with HTTP {exc.code} ({exc.reason})."
+            f"{_body_hint(exc)}",
             file=sys.stderr,
         )
     except Exception as exc:  # pylint: disable=broad-except

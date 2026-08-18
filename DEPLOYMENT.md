@@ -212,6 +212,16 @@ failed `localhost:8976/oauth/callback?code=…&state=…` URL from the browser a
 **Deploy fails on the custom domain.** The zone must be active on the same account,
 and `hk-bus-alarm-chart.iteneti.top` must not already have a DNS record.
 
+**Ingest returns 403 with `error code: 1010`.** Cloudflare's Browser Integrity
+Check blocked the request at the edge, before the Worker — it rejects urllib's
+default `Python-urllib/3.x` user agent. `bus_log_lib.py` therefore sends its own
+`User-Agent` (`hk-bus-alarm/1.0`), which passes. Zone security features like this
+apply to the custom domain but not to `*.workers.dev`, so this only shows up after
+Step 5. If a stricter WAF rule blocks uploads later, add a Configuration Rule
+(*Rules → Configuration Rules*) that turns Browser Integrity Check off for
+`hk-bus-alarm-chart.iteneti.top/api/*`, or a WAF custom rule with the **Skip**
+action for that path.
+
 **Ingest returns 401.** `$BUS_LOG_TOKEN` on the device and the `INGEST_TOKEN` secret
 on the Worker differ. Re-set the secret and retry; the device keeps the row locally,
 so replay it with `backfill_log.py` afterwards.

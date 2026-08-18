@@ -471,7 +471,7 @@ Shared logging layer used by `set_alarm_with_bus_eta.py` and `backfill_log.py`. 
 | Function | Description |
 |---|---|
 | `write_log_csv(log_file, record)` | Appends the record as a CSV row, writing the header when the file is new or empty. |
-| `post_record(url, token, record)` | Uploads one record to the ingest endpoint. Returns `True`/`False`; never raises. |
+| `post_record(url, token, record)` | Uploads one record to the ingest endpoint. Returns `True`/`False`; never raises. Sends `USER_AGENT`, because Cloudflare's Browser Integrity Check rejects urllib's default agent with a 403. |
 | `post_records(url, token, records)` | Uploads a batch (JSON array). Returns `True`/`False`; never raises. |
 | `resolve_token(token)` | Returns `token`, falling back to `$BUS_LOG_TOKEN`. |
 
