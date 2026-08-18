@@ -42,7 +42,7 @@ set_alarm_with_bus_eta.py --POST /api/ingest--> Worker --> D1 (schedule_log)
 - **Worker** (`web/src/index.js`) — bearer-token ingest, public read endpoint, static assets. D1 upserts on `(ts, route_id)` so re-ingest is idempotent; `ts_epoch`/`eta_epoch` columns exist so ordering and `?days=` filtering stay correct regardless of UTC offset.
 - **Chart** (`web/public/app.js`) — x is the calendar date, y is time of day plotted on a fixed dummy day (`1970-01-01 HH:MM:SS`) so Plotly's date axis can format `%H:%M`. Timestamps are split with a regex, never `new Date()`, so a `+08:00` bus is not re-expressed in the viewer's timezone. Points come straight from `find_schedule()`; the line follows the last record of each date.
 
-Deployment steps and API details are in README.md.
+API details are in README.md; the full Cloudflare setup (D1, ingest token, GitHub auto-deploy via Workers Builds, custom domain `hk-bus-alarm-chart.iteneti.top`) is in DEPLOYMENT.md.
 
 ## Architecture
 

@@ -8,7 +8,7 @@ Usage:
 
 Examples:
     # Send the whole history of 81.log (token from $BUS_LOG_TOKEN)
-    python backfill_log.py 81.log -log_url https://<worker>.workers.dev/api/ingest
+    python backfill_log.py 81.log -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest
 
     # Preview what would be sent without contacting the endpoint
     python backfill_log.py 81.log -log_url http://localhost:8787/api/ingest -dry_run
@@ -81,7 +81,7 @@ def main() -> int:
     _ = parser.add_argument("log_file", metavar="LOG_FILE", help="Path to the CSV log file.")
     _ = parser.add_argument(
         "-log_url", required=True, metavar="URL",
-        help="Ingest endpoint, e.g. https://<worker>.workers.dev/api/ingest",
+        help="Ingest endpoint, e.g. https://hk-bus-alarm-chart.iteneti.top/api/ingest",
     )
     _ = parser.add_argument(
         "-log_token", default=None, metavar="TOKEN",

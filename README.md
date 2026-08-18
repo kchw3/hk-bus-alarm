@@ -28,6 +28,7 @@ pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 | `bus_log_lib.py` | Schedule-log library (CSV row writer, ingest-endpoint uploader) |
 | `backfill_log.py` | CLI to upload an existing CSV log to the chart ingest endpoint |
 | `web/` | Cloudflare Worker + static page publishing the schedule history as a chart |
+| `DEPLOYMENT.md` | Step-by-step Cloudflare setup, GitHub auto-deploy, and custom domain |
 
 ---
 
@@ -172,7 +173,7 @@ python set_alarm_with_bus_eta.py -seq N
 | `-alarm_default_time` | No | — | Fallback alarm time (`HH:MM`) used when no bus schedule is found in the search window. Uses the same timezone as `-search_schedule_tz`. If omitted and no schedule is found, the alarm is set to `now + 2 minutes`. |
 | `-alarm_minutes_before_schedule` | No | `0` | Set the alarm this many minutes before the found schedule time. |
 | `-log_file` | No | — | Path to a CSV log file. Each run appends one row with `timestamp`, `route_id`, `bus_schedule`, `alarm_time`, and `reason`. The header is written automatically when the file is new or empty. Logging is disabled if omitted. |
-| `-log_url` | No | — | Ingest endpoint of the chart (`https://<worker>.workers.dev/api/ingest`). Each run uploads the same record, plus the matched schedule as a full ISO timestamp. Independent of `-log_file`, but **use both**: the CSV row is written first, so a failed upload stays replayable via `backfill_log.py`. Upload failures print a warning on stderr and never stop the alarm. |
+| `-log_url` | No | — | Ingest endpoint of the chart (`https://hk-bus-alarm-chart.iteneti.top/api/ingest`). Each run uploads the same record, plus the matched schedule as a full ISO timestamp. Independent of `-log_file`, but **use both**: the CSV row is written first, so a failed upload stays replayable via `backfill_log.py`. Upload failures print a warning on stderr and never stop the alarm. |
 | `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token for `-log_url`. Prefer the environment variable, which keeps the token out of the process list. |
 
 *Exactly one of `-add_alarm` / `-add_alarm_debug` / `-add_alarm_ha` is required.
@@ -233,7 +234,7 @@ export BUS_LOG_TOKEN='…'
 python set_alarm_with_bus_eta.py -seq 3 \
     -search_schedule_from 14:00 -search_schedule_to 15:00 \
     -log_file ~/bus_alarm.log \
-    -log_url https://hk-bus-alarm-chart.<subdomain>.workers.dev/api/ingest \
+    -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest \
     -add_alarm
 ```
 
@@ -497,8 +498,8 @@ python backfill_log.py LOG_FILE -log_url URL [-log_token TOKEN] [-batch_size N] 
 | `-dry_run` | No | off | Print what would be sent without contacting the endpoint. |
 
 ```bash
-python backfill_log.py 81.log -log_url https://<worker>.workers.dev/api/ingest -dry_run
-python backfill_log.py 81.log -log_url https://<worker>.workers.dev/api/ingest
+python backfill_log.py 81.log -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest -dry_run
+python backfill_log.py 81.log -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest
 ```
 
 ---
@@ -542,89 +543,16 @@ Records go into **D1** (Cloudflare's SQLite). The workload is tiny — ~17 rows 
 
 Both are free at this volume. If you ever want to switch, only `web/src/index.js` and `web/schema.sql` change — the device scripts and the chart page only speak the JSON API.
 
-### One-time Cloudflare setup
+### Deployment
 
-1. Create a free account at [dash.cloudflare.com/sign-up](https://dash.cloudflare.com/sign-up). No domain and no paid plan are needed — the Worker is served on a free `*.workers.dev` subdomain.
-2. Install the tooling and sign in. `wrangler login` opens a browser to authorise the CLI; on a headless box use `wrangler login --browser false` and open the printed URL, or set `CLOUDFLARE_API_TOKEN` instead.
+Full step-by-step setup — D1, the ingest token, GitHub auto-deploy via Workers Builds, and the custom domain — is in **[DEPLOYMENT.md](DEPLOYMENT.md)**. In short:
 
-   ```bash
-   cd web
-   npm install
-   npx wrangler login
-   npx wrangler whoami        # confirms which account you are deploying to
-   ```
-
-3. Create the D1 database. The command prints a `database_id` — paste it into the `d1_databases` block of `web/wrangler.jsonc`, replacing `REPLACE_WITH_DATABASE_ID`.
-
-   ```bash
-   npx wrangler d1 create hk-bus-alarm
-   ```
-
-4. Create the table in the remote database.
-
-   ```bash
-   npx wrangler d1 execute hk-bus-alarm --remote --file ./schema.sql
-   ```
-
-5. Set the upload token. Choose any long random string (`openssl rand -base64 32`); Wrangler prompts for the value so it never lands in your shell history. This is the same value the device sends as `$BUS_LOG_TOKEN`.
-
-   ```bash
-   npx wrangler secret put INGEST_TOKEN
-   ```
-
-6. Deploy. The output includes the public URL, e.g. `https://hk-bus-alarm-chart.<subdomain>.workers.dev`.
-
-   ```bash
-   npx wrangler deploy
-   ```
-
-7. Point the device at it, and load the URL in a browser to see the chart.
-
-   ```bash
-   export BUS_LOG_TOKEN='<the token from step 5>'
-   python set_alarm_with_bus_eta.py -seq 3 \
-       -search_schedule_from 06:00 -search_schedule_to 08:00 \
-       -log_file ~/bus_alarm.log \
-       -log_url https://hk-bus-alarm-chart.<subdomain>.workers.dev/api/ingest \
-       -add_alarm
-   ```
-
-8. Optionally load the history you already have:
-
-   ```bash
-   python backfill_log.py ~/bus_alarm.log \
-       -log_url https://hk-bus-alarm-chart.<subdomain>.workers.dev/api/ingest
-   ```
-
-Later deploys are just `npx wrangler deploy`; steps 3–5 are one-time. To see live request logs, run `npx wrangler tail`.
-
-### Custom domain
-
-To serve the chart from your own hostname instead of `*.workers.dev`, add a route to `web/wrangler.jsonc` and redeploy:
-
-```jsonc
-"routes": [
-  { "pattern": "bus.example.com", "custom_domain": true }
-]
-```
-
-```bash
-npx wrangler deploy
-```
-
-The zone must already be active on the same Cloudflare account, and the hostname must not already have a CNAME record. Wrangler creates the DNS record and the certificate.
-
-Only the host changes — the paths are the same:
-
-| | Default | Custom domain |
-|---|---|---|
-| Chart | `https://hk-bus-alarm-chart.<subdomain>.workers.dev/` | `https://bus.example.com/` |
-| `-log_url` | `https://…workers.dev/api/ingest` | `https://bus.example.com/api/ingest` |
-| Data | `https://…workers.dev/api/data.json` | `https://bus.example.com/api/data.json` |
-
-No code changes are needed: a Custom Domain routes every path on the hostname to the Worker, and the page requests its data relatively. The ingest token is unchanged, and the `*.workers.dev` URL keeps working alongside the custom domain — add `"workers_dev": false` to the config to retire it.
-
-**Use a whole hostname, not a subpath.** A route pattern such as `example.com/bus/*` will not work as-is: the Worker matches `/api/ingest` and `/api/data.json` exactly, so requests would arrive as `/bus/api/ingest` and fall through to the 404, and the static assets would not resolve either. Supporting a subpath means stripping the prefix in `web/src/index.js` and setting a `<base>` in `index.html`.
+| | |
+|---|---|
+| Worker | `hk-bus-alarm-chart` (repository subdirectory `web/`) |
+| Chart | <https://hk-bus-alarm-chart.iteneti.top/> |
+| Ingest | `https://hk-bus-alarm-chart.iteneti.top/api/ingest` |
+| Deploys | automatically on push to `main`; manually with `cd web && npx wrangler deploy` |
 
 ### Local development
 
@@ -647,7 +575,7 @@ Logging is secondary to setting the alarm, so `set_alarm_with_bus_eta.py` never 
   ```
   Warning: schedule log upload failed: <urlopen error [Errno 111] Connection refused>
            The record is still in ~/bus_alarm.log; upload it later with:
-             python backfill_log.py ~/bus_alarm.log -log_url https://<worker>.workers.dev/api/ingest
+             python backfill_log.py ~/bus_alarm.log -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest
   ```
 
 - Replaying is safe and repeatable: ingest upserts on `(timestamp, route_id)`, so re-sending rows that already arrived changes nothing. There is no need to track which rows failed — just re-run `backfill_log.py` over the whole file.

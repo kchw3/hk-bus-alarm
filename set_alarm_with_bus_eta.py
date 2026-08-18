@@ -40,7 +40,7 @@ Examples:
     # Also upload each run to the chart ingest endpoint (token from $BUS_LOG_TOKEN)
     python set_alarm_with_bus_eta.py -seq 3 \\
         -search_schedule_from 14:00 -search_schedule_to 15:00 \\
-        -log_url https://<worker>.workers.dev/api/ingest \\
+        -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest \\
         -add_alarm
 
     # Different timezone
@@ -349,7 +349,7 @@ if __name__ == "__main__":
         "-log_url", default=None, metavar="URL",
         help=(
             "Ingest endpoint of the schedule chart (e.g. "
-            "https://<worker>.workers.dev/api/ingest). Each run uploads one record. "
+            "https://hk-bus-alarm-chart.iteneti.top/api/ingest). Each run uploads one record. "
             "Independent of -log_file; upload failures only warn and never stop the alarm."
         ),
     )
