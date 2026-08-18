@@ -217,7 +217,10 @@ function buildTraces(routes) {
       customdata: finals.customdata,
       hovertemplate: HOVER_TEMPLATE,
       connectgaps: false,
-      line: { width: 2, color, shape: "linear" },
+      // Spline reads as a trend line between one point per day. Smoothing is
+      // kept below Plotly's 1.3 maximum so the curve does not overshoot far
+      // past a marker and imply a schedule that was never logged.
+      line: { width: 2, color, shape: "spline", smoothing: 0.8 },
       // 2px surface ring keeps overlapping markers separable.
       marker: { size: 9, color, line: { width: 2, color: surface } },
     });
@@ -225,8 +228,57 @@ function buildTraces(routes) {
   return traces;
 }
 
-function buildLayout() {
+const WEEKEND_DAYS = new Set([0, 6]); // Sunday, Saturday
+const MAX_WEEKEND_BANDS = 400;
+const HALF_DAY_MS = 43200000;
+
+/** 'YYYY-MM-DD HH:MM:SS' for a Plotly date axis, from an epoch in UTC. */
+function axisStamp(epoch) {
+  return new Date(epoch).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * A background band behind every Saturday and Sunday in the plotted range.
+ *
+ * Weekday is read in UTC from the plain `YYYY-MM-DD` string so the viewer's own
+ * timezone cannot shift a band onto the neighbouring day. Each band is centred
+ * on its date, spanning midday to midday, so the marker sits in the middle.
+ */
+function weekendBands(dates) {
+  if (dates.length === 0) {
+    return [];
+  }
+  const first = Date.parse(`${dates[0]}T00:00:00Z`);
+  const last = Date.parse(`${dates[dates.length - 1]}T00:00:00Z`);
+  if (Number.isNaN(first) || Number.isNaN(last)) {
+    return [];
+  }
+
+  const color = cssVar("--weekend-band");
+  const shapes = [];
+  for (let t = first; t <= last && shapes.length < MAX_WEEKEND_BANDS; t += 2 * HALF_DAY_MS) {
+    if (!WEEKEND_DAYS.has(new Date(t).getUTCDay())) {
+      continue;
+    }
+    shapes.push({
+      type: "rect",
+      xref: "x",
+      yref: "paper",
+      layer: "below",
+      x0: axisStamp(t - HALF_DAY_MS),
+      x1: axisStamp(t + HALF_DAY_MS),
+      y0: 0,
+      y1: 1,
+      fillcolor: color,
+      line: { width: 0 },
+    });
+  }
+  return shapes;
+}
+
+function buildLayout(dates) {
   return {
+    shapes: weekendBands(dates),
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
     font: { color: cssVar("--text-secondary"), size: 12 },
@@ -315,7 +367,8 @@ function render() {
   }
 
   hideMessage();
-  Plotly.react(el.chart, buildTraces(routes), buildLayout(), PLOT_CONFIG);
+  const dates = [...new Set(records.map((r) => (splitIso(r.eta_iso) || {}).date).filter(Boolean))].sort();
+  Plotly.react(el.chart, buildTraces(routes), buildLayout(dates), PLOT_CONFIG);
   renderTable(routes);
 }
 

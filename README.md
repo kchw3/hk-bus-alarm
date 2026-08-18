@@ -512,6 +512,8 @@ A Cloudflare Worker that stores uploaded records in D1 and serves a public, no-l
 - **y** — time of day
 - **points** — the schedule selected by `find_schedule()` (the latest ETA inside the search window) at each run
 - **line** — the final schedule logged on each date, i.e. the one the alarm acted on, joined across dates
+- **line shape** — a spline through one point per day, so day-to-day drift reads as a trend
+- **weekends** — Saturdays and Sundays carry a shaded background band
 - Every poll of the day can be shown as faint `×` markers via the checkbox, routes are colour-coded with a legend, and a table view is available underneath.
 
 ### Layout
