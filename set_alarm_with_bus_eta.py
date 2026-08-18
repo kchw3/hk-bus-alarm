@@ -78,6 +78,48 @@ from bus_log_lib import LOG_TOKEN_ENV, LogRecord, post_record, write_log_csv
 _MIN_ALARM_LEAD_MINUTES = 2
 
 
+def _log_run(
+    record: LogRecord,
+    log_file: str | None,
+    log_url: str | None,
+    log_token: str | None,
+) -> None:
+    """Record one run locally and upload it.
+
+    Logging is strictly secondary to setting the alarm, so nothing here raises:
+    a full disk, an unwritable path or an unreachable endpoint only produces a
+    warning on stderr. The local CSV is written first, so a failed upload leaves
+    a copy that `backfill_log.py` can replay later (ingest upserts, so replaying
+    rows that did make it through is harmless).
+    """
+    stored_locally = False
+    if log_file is not None:
+        try:
+            write_log_csv(log_file, record)
+            stored_locally = True
+        except OSError as exc:
+            print(f"Warning: could not write log file {log_file}: {exc}", file=sys.stderr)
+
+    if log_url is None:
+        return
+
+    if post_record(log_url, log_token, record):
+        return
+
+    if stored_locally:
+        print(
+            f"         The record is still in {log_file}; upload it later with:\n"
+            f"           python backfill_log.py {log_file} -log_url {log_url}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "         The record was not stored locally either, so it cannot be "
+            "replayed. Add -log_file PATH to keep a replayable copy.",
+            file=sys.stderr,
+        )
+
+
 @dataclass
 class AlarmConfig:
     alarm_label: str
@@ -214,19 +256,19 @@ def run(
 
     # --- Write / upload log row ---
     if log_file is not None or log_url is not None:
-        record = LogRecord(
-            timestamp=datetime.now(tz=tz).isoformat(timespec="seconds"),
-            route_id=query.route_id,
-            bus_schedule=schedule_detail,
-            alarm_time=alarm_dt.strftime("%H:%M"),
-            reason=alarm_reason,
-            eta_iso=schedule_eta_iso,
+        _log_run(
+            LogRecord(
+                timestamp=datetime.now(tz=tz).isoformat(timespec="seconds"),
+                route_id=query.route_id,
+                bus_schedule=schedule_detail,
+                alarm_time=alarm_dt.strftime("%H:%M"),
+                reason=alarm_reason,
+                eta_iso=schedule_eta_iso,
+            ),
+            log_file,
+            log_url,
+            log_token,
         )
-        if log_file is not None:
-            write_log_csv(log_file, record)
-        if log_url is not None:
-            # Best-effort: upload failures warn on stderr and never stop the alarm.
-            post_record(log_url, log_token, record)
 
     if ha:
         status = "FOUND" if found is not None else "NOT_FOUND"

@@ -38,7 +38,7 @@ set_alarm_with_bus_eta.py --POST /api/ingest--> Worker --> D1 (schedule_log)
                                                    +-- static page: Plotly chart
 ```
 
-- **Upload** — `bus_log_lib.py` holds `LogRecord` plus both sinks (`write_log_csv`, `post_record`). Uploads are best-effort: failures warn on stderr and never affect the alarm. `backfill_log.py` replays an existing CSV into the same endpoint.
+- **Upload** — `bus_log_lib.py` holds `LogRecord` plus both sinks (`write_log_csv`, `post_record`). `_log_run()` in `set_alarm_with_bus_eta.py` is the only caller and swallows everything: a bad log path or a failed upload is a stderr warning, never an exception, and the CSV is written before the upload is attempted so a failed row stays replayable. The failure message names the replay command; `backfill_log.py` re-sends the whole file and ingest upserts, so replaying already-delivered rows is a no-op.
 - **Worker** (`web/src/index.js`) — bearer-token ingest, public read endpoint, static assets. D1 upserts on `(ts, route_id)` so re-ingest is idempotent; `ts_epoch`/`eta_epoch` columns exist so ordering and `?days=` filtering stay correct regardless of UTC offset.
 - **Chart** (`web/public/app.js`) — x is the calendar date, y is time of day plotted on a fixed dummy day (`1970-01-01 HH:MM:SS`) so Plotly's date axis can format `%H:%M`. Timestamps are split with a regex, never `new Date()`, so a `+08:00` bus is not re-expressed in the viewer's timezone. Points come straight from `find_schedule()`; the line follows the last record of each date.
 
