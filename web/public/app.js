@@ -2,8 +2,9 @@
  * Renders the logged bus schedules as date (x) vs time-of-day (y).
  *
  * Two traces per route:
- *   - "final"     the last logged schedule of each date — the one the alarm acted on.
- *                 Markers joined by a line, so day-to-day drift reads as a trend.
+ *   - "final"     one entry per date: the last logged schedule of that day, with the
+ *                 alarm and reason from its first poll. Markers joined by a line, so
+ *                 day-to-day drift reads as a trend.
  *   - "all polls" every logged schedule, faint x markers. Off by default.
  */
 
@@ -99,21 +100,32 @@ function groupByRoute(records) {
   return routes;
 }
 
-/** Last point of each date — the schedule the alarm actually acted on. */
-function finalPerDate(points) {
+/**
+ * Collapse a route's polls into one entry per date.
+ *
+ * The two halves come from opposite ends of the day, deliberately:
+ *   - schedule: the LAST poll, the final ETA the run acted on.
+ *   - alarm and reason: the FIRST poll. Later runs are clamped to now+2m
+ *     (see _MIN_ALARM_LEAD_MINUTES in set_alarm_with_bus_eta.py), so their
+ *     alarm times just track the clock and say nothing about the bus; the
+ *     first run of the morning holds the alarm actually planned for it.
+ */
+function perDateSummary(points) {
   const byDate = new Map();
   for (const point of points) {
-    byDate.set(point.date, point); // records arrive ordered by timestamp
+    const entry = byDate.get(point.date);
+    if (!entry) {
+      // First poll of this date: its alarm and reason are kept as-is.
+      byDate.set(point.date, { ...point, polls: 1, firstLoggedAt: point.loggedAt });
+      continue;
+    }
+    // Records arrive ordered by timestamp, so each later poll refreshes the schedule.
+    entry.clock = point.clock;
+    entry.dummy = point.dummy;
+    entry.loggedAt = point.loggedAt;
+    entry.polls += 1;
   }
   return [...byDate.values()];
-}
-
-function countsPerDate(points) {
-  const counts = new Map();
-  for (const point of points) {
-    counts.set(point.date, (counts.get(point.date) || 0) + 1);
-  }
-  return counts;
 }
 
 function withinRange(records, days) {
@@ -193,7 +205,7 @@ function buildTraces(routes) {
       });
     }
 
-    const finals = seriesWithGaps(finalPerDate(points));
+    const finals = seriesWithGaps(perDateSummary(points));
     traces.push({
       type: "scatter",
       mode: "lines+markers",
@@ -264,10 +276,7 @@ const PLOT_CONFIG = {
 function renderTable(routes) {
   const rows = [];
   for (const [, points] of routes) {
-    const counts = countsPerDate(points);
-    for (const point of finalPerDate(points)) {
-      rows.push({ ...point, polls: counts.get(point.date) });
-    }
+    rows.push(...perDateSummary(points));
   }
   rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 

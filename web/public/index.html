@@ -137,7 +137,7 @@
         <table>
           <thead>
             <tr>
-              <th>Date</th><th>Route</th><th>Schedule</th><th>Alarm</th><th>Polls</th><th>Logged at</th><th>Reason</th>
+              <th>Date</th><th>Route</th><th title="ETA from the last poll of the day">Schedule</th><th title="Alarm set by the first poll of the day">Alarm</th><th>Polls</th><th title="Timestamp of the last poll">Logged at</th><th title="Why the first poll chose that alarm time">Reason</th>
             </tr>
           </thead>
           <tbody id="tableBody"></tbody>
@@ -148,6 +148,9 @@
     <footer>
       Each point is the schedule selected by <code>find_schedule()</code> — the latest
       ETA inside the search window — as logged by <code>set_alarm_with_bus_eta.py</code>.
+      In the table, <strong>Schedule</strong> is the last poll of that day and
+      <strong>Alarm</strong> is the one set by the first poll: later runs are clamped to
+      <code>now + 2m</code>, so their alarm times only track the clock.
     </footer>
   </div>
 
