@@ -105,6 +105,107 @@ A run stopped with Ctrl-C or `kill` still flushes its final record, so the "last
 sighting" is preserved. Only `kill -9` loses it; the ETA history is already
 durable either way.
 
+## Step 4 — Schedule it to run daily
+
+One run tracks one bus, and exits on its own once that bus leaves the feed. So a
+daily job is simply "start it ahead of the bus you care about".
+
+### Choose the lead time
+
+Start about **60 minutes ahead**. Measured against a feed that begins publishing
+the bus 50 minutes out and revises it six times:
+
+| Lead | API calls | Ran for | Estimates captured | First estimate |
+|---|---|---|---|---|
+| 90m | 115 | 99m | 6 | 13:42:00 |
+| **60m** | **85** | **69m** | **6** | **13:42:00** |
+| 30m | 55 | 39m | 5 | 13:43:30 |
+| 10m | 35 | 19m | 3 | 13:45:30 |
+
+More than 60m buys nothing — you cannot observe estimates the operator has not
+published yet, so the extra polls all land in the acquire phase. Less than 60m
+starts losing the *earliest* estimate, and since that is the lower bound of the
+bracket, a short lead quietly shortens the interval rather than measuring it. The
+final estimate and the last sighting are identical at every lead time; only the
+lower bound is at risk.
+
+### Cap the runtime
+
+The 180-minute default is a safety net for interactive use, not a good value for
+a cron job. On a day the route does not run — Sunday, a holiday timetable, a
+typhoon — the tracker never acquires and polls uselessly until the cap:
+
+| `-max_runtime_minutes` | Wasted calls on a no-show day |
+|---|---|
+| 180 (default) | 180 |
+| 90 | 90 |
+
+With a 60m lead and a bus that clears the feed ~10 minutes past its ETA, a real
+run finishes in about 70 minutes. **`-max_runtime_minutes 90`** leaves ~20
+minutes of headroom and halves the cost of a no-show. It exits `not_acquired`,
+writes nothing, and leaves no partial session on the chart.
+
+### The same-day constraint
+
+The search window is built from `date.today()` — the **system-local date at the
+moment the process starts**. Two consequences for scheduling:
+
+- **The run must start on the same calendar day as the target bus.** Scheduling
+  at 23:30 to catch a 00:20 bus builds the window on the wrong day, and it will
+  never acquire. There is no way to get ahead of an after-midnight bus; track it
+  with a window on its own date instead.
+- **The device timezone must match `-search_schedule_tz`** (both `+08:00` by
+  default), or the same mismatch appears for runs near midnight.
+
+An early-morning bus is fine: a 06:30 departure needs a 05:30 start, which is
+still the same day.
+
+### Cron on Termux
+
+```bash
+pkg install termux-services cronie
+sv-enable crond
+crontab -e
+```
+
+```cron
+40 12 * * 1-5 termux-wake-lock; cd ~/hk-bus-alarm && \
+  python track_bus_arrival.py -seq 8 \
+    -search_schedule_from 13:40 -search_schedule_to 13:50 \
+    -max_runtime_minutes 90 \
+    -log_file ~/bus_track.log \
+    -log_url https://hk-bus-alarm-chart.iteneti.top/api/arrivals/ingest \
+    >> ~/track.out 2>&1; termux-wake-unlock
+```
+
+- `40 12` is 60 minutes before the 13:40 window opens.
+- `1-5` skips weekends, which removes most no-show days outright.
+- **The wake lock is not optional.** Without it Android freezes the process once
+  the screen goes off and the polls stop silently, mid-track — you get a session
+  that ends with no red marker and looks like the bus vanished early.
+- Runs are 24 hours apart and capped at 90 minutes, so they can never overlap.
+
+`$BUS_LOG_TOKEN` will not be set inside a cron environment. Either pass
+`-log_token` explicitly, or source a file that exports it:
+
+```cron
+40 12 * * 1-5 . ~/.bus_env; termux-wake-lock; cd ~/hk-bus-alarm && python track_bus_arrival.py ...
+```
+
+Uploads that fail for a missing token still leave every row in `-log_file`;
+replay them with `backfill_track_log.py`.
+
+### Confirm it ran
+
+```bash
+tail -20 ~/track.out          # the run summary, including the deduced bracket
+tail -5  ~/bus_track.log      # the rows it wrote
+```
+
+A healthy run ends with `Bus arrived between HH:MM:SS and HH:MM:SS`. Anything
+else — `not_acquired`, `timeout`, `interrupted` — is reported explicitly and
+means the figures above it are the last observation, not an arrival.
+
 ## Verification
 
 ```bash

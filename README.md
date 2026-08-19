@@ -624,6 +624,14 @@ termux-wake-lock
 nohup python track_bus_arrival.py ... > ~/track.out 2>&1 &
 ```
 
+### Running it daily
+
+One run tracks one bus and exits by itself, so a daily cron job is just "start it ahead of the bus you care about". Start **60 minutes ahead** — earlier buys nothing, since you cannot observe estimates the operator has not published yet, while a shorter lead loses the earliest estimate and quietly shortens the bracket. Pass `-max_runtime_minutes 90` so a day the route does not run costs 90 polls rather than the default 180.
+
+One constraint to plan around: the window is built from `date.today()`, so **the run must start on the same calendar day as the target bus**. There is no way to get ahead of an after-midnight departure.
+
+Cron setup, the wake-lock requirement and the `$BUS_LOG_TOKEN`-in-cron gotcha are in [DEPLOYMENT-ARRIVALS.md § Step 4](DEPLOYMENT-ARRIVALS.md#step-4--schedule-it-to-run-daily).
+
 ---
 
 ## backfill_track_log.py
