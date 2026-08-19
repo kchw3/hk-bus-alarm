@@ -52,7 +52,13 @@ def eta_to_datetime(entry: dict) -> datetime | None:
 
 
 def format_eta_entry(entry: dict) -> str:
-    """Format a single ETA entry as '2026-04-21T14:32+08:00 (15m)'."""
+    """Format a single ETA entry as '2026-04-21T14:32+08:00 (15m)'.
+
+    Minute precision is deliberate and must stay that way: this feeds the alarm
+    scripts' console output and the logged `bus_schedule` column, whose format
+    downstream consumers rely on. Use `format_eta_stamp()` for listings that
+    should show seconds.
+    """
     now = datetime.now(tz=timezone.utc)
     eta_dt = eta_to_datetime(entry)
     if eta_dt is None:
@@ -60,6 +66,44 @@ def format_eta_entry(entry: dict) -> str:
     diff_min = int((eta_dt - now).total_seconds() / 60)
     ts = eta_dt.strftime("%Y-%m-%dT%H:%M") + _offset(eta_dt)
     return f"{ts} ({diff_min}m)"
+
+
+def format_eta_stamp(eta_dt: datetime, diff_min: int) -> str:
+    """Format a parsed ETA as '2026-04-21T14:32:47+08:00 (5m)', seconds included.
+
+    Takes an already-parsed datetime and minute count so callers that filter on
+    them (see `upcoming_etas()`) do not parse twice. `format_eta_entry()` is the
+    minute-precision counterpart.
+    """
+    return f"{eta_dt.strftime('%Y-%m-%dT%H:%M:%S')}{_offset(eta_dt)} ({diff_min}m)"
+
+
+def upcoming_etas(
+    etas: list,
+    now: datetime,
+    keep: dict | None = None,
+) -> list[tuple[dict, datetime, int]]:
+    """Return (entry, eta_dt, diff_min) for every ETA that has not yet passed.
+
+    The cutoff is exact to the second: an entry drops out the moment its ETA is
+    behind `now`, rather than up to a minute later as truncating the minute
+    count to an int would. Entries with an unparsable `eta` are skipped.
+
+    `keep` survives that cutoff regardless — pass the entry `find_schedule()`
+    matched, so a listing that flags the match with a marker cannot end up
+    flagging nothing. `diff_min` is truncated toward zero, so it is negative
+    only for a `keep` entry whose ETA has passed.
+    """
+    result = []
+    for entry in etas:
+        eta_dt = eta_to_datetime(entry)
+        if eta_dt is None:
+            continue
+        delta = (eta_dt - now).total_seconds()
+        if delta < 0 and entry is not keep:
+            continue
+        result.append((entry, eta_dt, int(delta / 60)))
+    return result
 
 
 def find_schedule(etas: list, from_dt: datetime, to_dt: datetime) -> dict | None:

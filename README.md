@@ -81,15 +81,21 @@ Columns are dynamically sized to the widest value in each column (plus 3 spaces 
 ```
   Seq   Co      Stop ID        English                           中文              ETA
   --------------------------------------------------------------------------------------
-  1     kmb     E10101...      West Kowloon Station Bus Terminus 西九龍站巴士總站   2026-04-21T14:32+08:00 (5m),  2026-04-21T14:50+08:00 (23m)
+  1     kmb     E10101...      West Kowloon Station Bus Terminus 西九龍站巴士總站   2026-04-21T14:32:47+08:00 (5m),  2026-04-21T14:50:12+08:00 (23m)
 ```
 
-**ETA format:** `YYYY-MM-DDTHH:MM±HH:MM (Nm)` — ISO 8601 timestamp followed by minutes from now. Only upcoming arrivals (≥ 0 min) are shown. `—` if none available.
+**ETA format:** `YYYY-MM-DDTHH:MM:SS±HH:MM (Nm)` — ISO 8601 timestamp followed by minutes from now. Seconds are shown so the column matches the raw `eta` field printed by `-detail`. Only upcoming arrivals are shown, and the cutoff is exact to the second: an entry disappears the moment its ETA passes. `—` if none available.
 
 When a schedule search is active and a match is found, the matching entry is marked with ` *`:
 
 ```
-  2026-04-21T14:32+08:00 (5m) *,  2026-04-21T14:50+08:00 (23m)
+  2026-04-21T14:32:47+08:00 (5m) *,  2026-04-21T14:50:12+08:00 (23m)
+```
+
+The matched entry is always listed, even once its ETA has passed — it then shows negative minutes and keeps its marker, rather than vanishing from the column while the detail block below still reports it under `Matched schedule`:
+
+```
+  2026-04-21T14:32:47+08:00 (-3m) *,  2026-04-21T14:50:12+08:00 (23m)
 ```
 
 #### Detail block (`-detail`)
@@ -379,8 +385,10 @@ The event is always created with the title **`Bus schedule`**. The description i
 - Route header (Route ID, Origin, Dest)
 - Stop details (sequence number, operator, stop ID, English and Chinese names)
 - Search window and matched schedule timestamp (or a note that none was found)
-- All upcoming ETAs, with the matched entry marked `*`
+- All upcoming ETAs to the second, with the matched entry marked `*` — kept in the list even once its ETA has passed, so the marker never goes missing
 - Raw fields of the matched ETA entry (omitted when no schedule was found)
+
+The `Matched` line and the `Found schedule:` console line stay at minute precision (`format_eta_entry()`), because the same helper produces the alarm scripts' output and the logged `bus_schedule` column.
 
 ### Debug mode output
 
@@ -413,8 +421,8 @@ Search window : 14:00–15:00  (tz +08:00)
 Matched       : 2026-04-21T14:32+08:00 (5m)
 
 All upcoming ETAs:
-  2026-04-21T14:32+08:00 (5m)  *
-  2026-04-21T14:50+08:00 (23m)
+  2026-04-21T14:32:47+08:00 (5m)  *
+  2026-04-21T14:50:12+08:00 (23m)
 
 Matched schedule (raw fields):
   eta    : 2026-04-21T14:32:00+08:00

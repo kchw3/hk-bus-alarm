@@ -45,11 +45,11 @@ from hk_bus_eta import HKEta
 from hk_bus_common import (
     DEFAULT_ROUTE_ID,
     _offset,
-    eta_to_datetime,
     find_schedule,
-    format_eta_entry,
+    format_eta_stamp,
     parse_hhmm,
     parse_tz,
+    upcoming_etas,
 )
 
 
@@ -79,22 +79,18 @@ def ljust_display(s: str, width: int) -> str:
 def format_etas(etas: list, found_schedule: dict | None = None) -> str:
     """
     Build the ETA column string.
-    - Only includes upcoming (non-negative) entries.
-    - If found_schedule is provided and matches one of the entries, appends ' *'
-      to that entry's formatted string.
+    - Only includes upcoming entries, with the ETA already passed as the exact
+      cutoff.
+    - If found_schedule is provided it is always included, even once its ETA has
+      passed (shown with negative minutes), and marked with ' *'. Otherwise the
+      marker would silently disappear while the detail block below still printed
+      the entry under "Matched schedule".
     Returns "—" if no upcoming ETAs.
     """
     now = datetime.now(tz=timezone.utc)
     parts = []
-    for entry in etas:
-        eta_dt = eta_to_datetime(entry)
-        if eta_dt is None:
-            continue
-        diff_min = int((eta_dt - now).total_seconds() / 60)
-        if diff_min < 0:
-            continue
-        ts = eta_dt.strftime("%Y-%m-%dT%H:%M") + _offset(eta_dt)
-        text = f"{ts} ({diff_min}m)"
+    for entry, eta_dt, diff_min in upcoming_etas(etas, now, keep=found_schedule):
+        text = format_eta_stamp(eta_dt, diff_min)
         if found_schedule is not None and entry is found_schedule:
             text += " *"
         parts.append(text)

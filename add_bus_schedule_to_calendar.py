@@ -53,8 +53,10 @@ from hk_bus_common import (
     eta_to_datetime,
     find_schedule,
     format_eta_entry,
+    format_eta_stamp,
     parse_hhmm,
     parse_tz,
+    upcoming_etas,
 )
 from google_calendar_lib import get_calendar_service, create_calendar_event
 
@@ -114,24 +116,16 @@ def build_event_description(
         lines.append("Matched       : (no schedule found — event start set to script run time)")
     lines.append("")
 
-    # All upcoming ETAs, marking the matched one
-    upcoming = [
-        (entry, eta_to_datetime(entry))
-        for entry in etas
-        if eta_to_datetime(entry) is not None
-    ]
-    upcoming = [
-        (entry, dt) for entry, dt in upcoming
-        if int((dt - now).total_seconds() / 60) >= 0
-    ]
+    # All upcoming ETAs, marking the matched one. The match is kept even once
+    # its ETA has passed, so the ' *' marker never goes missing from a listing
+    # whose "Matched" line above still names that bus.
+    upcoming = upcoming_etas(etas, now, keep=found)
 
     if upcoming:
         lines.append("All upcoming ETAs:")
-        for entry, eta_dt in upcoming:
-            diff_min = int((eta_dt - now).total_seconds() / 60)
-            ts = eta_dt.strftime("%Y-%m-%dT%H:%M") + _offset(eta_dt)
+        for entry, eta_dt, diff_min in upcoming:
             marker = "  *" if entry is found else ""
-            lines.append(f"  {ts} ({diff_min}m){marker}")
+            lines.append(f"  {format_eta_stamp(eta_dt, diff_min)}{marker}")
         lines.append("")
     else:
         lines.append("All upcoming ETAs: (none)")
