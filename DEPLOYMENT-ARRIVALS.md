@@ -202,6 +202,12 @@ tail -20 ~/track.out          # the run summary, including the deduced bracket
 tail -5  ~/bus_track.log      # the rows it wrote
 ```
 
+`~/track.out` holds one line per poll, flushed as it goes, so you can also watch
+a run live with `tail -f ~/track.out`. Most lines will read `unchanged, no
+write` — that is the normal steady state confirming the poll happened and the
+ETA had not moved, not a problem. Add `-quiet` to the cron line if you would
+rather log only the changes; a 90-minute run writes roughly 80 lines otherwise.
+
 A healthy run ends with `Bus arrived between HH:MM:SS and HH:MM:SS`. Anything
 else — `not_acquired`, `timeout`, `interrupted` — is reported explicitly and
 means the figures above it are the last observation, not an arrival.

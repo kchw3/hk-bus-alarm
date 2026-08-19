@@ -17,7 +17,7 @@ Usage:
         -search_schedule_from HH:MM -search_schedule_to HH:MM
         [-route_id ROUTE_ID] [-search_schedule_tz TZ]
         [-log_file PATH] [-log_url URL] [-log_token TOKEN]
-        [-max_runtime_minutes N] [-debug]
+        [-max_runtime_minutes N] [-quiet] [-debug]
 
 Examples:
     # Start about an hour ahead and track the bus due between 13:40 and 13:50
@@ -162,6 +162,38 @@ def _poll_interval(now: datetime, eta_dt: datetime | None) -> int:
     return POLL_FAST_SECONDS if remaining <= FAST_WINDOW_SECONDS else POLL_SLOW_SECONDS
 
 
+def _emit(line: str) -> None:
+    """Write one progress line, flushing immediately.
+
+    Without the flush, redirecting to a file (`>> ~/track.out`, as the cron
+    recipe does) buffers output for minutes at a time, and a healthy run is
+    indistinguishable from a hung one for as long as the buffer holds.
+    """
+    print(line, flush=True)
+
+
+def _progress(now: datetime, poll_no: int, note: str, wait: int | None = None) -> str:
+    """One line per poll: when it ran, what was seen, and whether anything was written."""
+    tail = f"  ·  next in {wait}s" if wait is not None else ""
+    return f"  {now.strftime('%H:%M:%S')}  poll {poll_no:<4} {note}{tail}"
+
+
+def _feed_dump(etas: list) -> str:
+    """Every ETA the feed returned, for `-debug`.
+
+    The selected entry alone cannot show whether the window is admitting a
+    second bus; the full list can.
+    """
+    stamps = [str(e.get("eta")) for e in etas] or ["(empty)"]
+    return "              feed: " + ", ".join(stamps)
+
+
+def _eta_note(eta_dt: datetime, now: datetime) -> str:
+    """'ETA 13:47:00 (+3.0m)' — the sign is what distinguishes overdue from upcoming."""
+    remaining = (eta_dt - now).total_seconds() / 60
+    return f"ETA {eta_dt.strftime('%H:%M:%S')} ({remaining:+.1f}m)"
+
+
 def run_tracking(
     *,
     poll_fn,
@@ -173,8 +205,9 @@ def run_tracking(
     now_fn,
     sleep_fn=time.sleep,
     max_runtime_minutes: int = DEFAULT_MAX_RUNTIME_MINUTES,
+    quiet: bool = False,
     debug: bool = False,
-    out=print,
+    out=_emit,
 ) -> TrackResult:
     """Poll until the tracked bus leaves the feed, recording every distinct ETA.
 
@@ -184,6 +217,12 @@ def run_tracking(
 
     `now_fn`, `sleep_fn` and `poll_fn` are injected so the loop is testable
     without the network and without real sleeps.
+
+    Output is one line per poll by default, so an unattended run visibly confirms
+    it is still polling even across the long stretches where nothing changes.
+    `quiet` drops that to significant events only; `debug` adds every ETA the
+    feed returned, which is what shows whether the window is admitting a second
+    bus.
     """
     started = now_fn()
     session_id = f"{route_id}|{seq}|{started.isoformat(timespec='seconds')}"
@@ -206,14 +245,18 @@ def run_tracking(
             now = now_fn()
             if now >= deadline:
                 outcome = "timeout" if acquired else "not_acquired"
+                out(_progress(
+                    now, polls,
+                    f"STOPPING — hit the {max_runtime_minutes}m runtime cap",
+                ))
                 break
 
             etas = poll_fn()
             polls += 1
             if etas is None:
-                if debug:
-                    out(f"  {now.strftime('%H:%M:%S')}  poll failed; keeping state")
-                sleep_fn(_poll_interval(now, current_eta_dt))
+                wait = _poll_interval(now, current_eta_dt)
+                out(_progress(now, polls, "poll FAILED — keeping last known state", wait))
+                sleep_fn(wait)
                 continue
 
             found = find_schedule(etas, from_dt, to_dt)
@@ -222,10 +265,18 @@ def run_tracking(
             if found is None:
                 if acquired:
                     # The entry left the feed: the bus has gone.
+                    out(_progress(now, polls, "GONE from feed — tracking complete"))
                     outcome = "arrived"
                     break
+                if not quiet:
+                    out(_progress(
+                        now, polls,
+                        f"waiting — nothing in {from_dt.strftime('%H:%M')}"
+                        f"–{to_dt.strftime('%H:%M')} yet",
+                        POLL_SLOW_SECONDS,
+                    ))
                 if debug:
-                    out(f"  {now.strftime('%H:%M:%S')}  no bus in window yet")
+                    out(_feed_dump(etas))
                 sleep_fn(POLL_SLOW_SECONDS)
                 continue
 
@@ -258,21 +309,34 @@ def run_tracking(
                     window_from=window_from,
                     window_to=window_to,
                 )
+                was = current_eta_dt
                 current_eta_dt = eta_dt
                 sink.emit(current)
-                if debug:
-                    out(f"  {now.strftime('%H:%M:%S')}  ETA {eta_iso}")
+                change = (
+                    "ACQUIRED" if was is None
+                    else f"CHANGED from {was.strftime('%H:%M:%S')}"
+                )
+                out(_progress(
+                    now, polls,
+                    f"{_eta_note(eta_dt, now)}  {change} → row written",
+                    _poll_interval(now, eta_dt),
+                ))
             else:
                 current.last_seen = poll_ts
                 current.polls += 1
                 dirty = True
-                if debug:
-                    remaining = (eta_dt - now).total_seconds()
-                    out(
-                        f"  {now.strftime('%H:%M:%S')}  ETA unchanged "
-                        f"({remaining / 60:+.1f}m), polls={current.polls}"
-                    )
+                if not quiet:
+                    overdue = eta_dt <= now
+                    out(_progress(
+                        now, polls,
+                        f"{_eta_note(eta_dt, now)}  unchanged, no write"
+                        + (" (overdue, still listed)" if overdue else "")
+                        + f"  [seen {current.polls}x]",
+                        _poll_interval(now, eta_dt),
+                    ))
 
+            if debug:
+                out(_feed_dump(etas))
             sleep_fn(_poll_interval(now, eta_dt))
     except (_StopTracking, KeyboardInterrupt):
         outcome = "interrupted"
@@ -332,6 +396,7 @@ def run(
     log_url: str | None,
     log_token: str | None,
     max_runtime_minutes: int,
+    quiet: bool,
     debug: bool,
 ) -> None:
     """Resolve the stop, then track it until the bus is gone."""
@@ -379,7 +444,12 @@ def run(
     )
     print(
         f"Polling  : every {POLL_SLOW_SECONDS}s, every {POLL_FAST_SECONDS}s "
-        f"within {FAST_WINDOW_SECONDS // 60}m of the ETA. Ctrl-C to stop.\n"
+        f"within {FAST_WINDOW_SECONDS // 60}m of the ETA. Ctrl-C to stop."
+    )
+    print(
+        "           One line per poll below. A row is only written when the ETA "
+        "changes,\n           so \"unchanged, no write\" is the normal steady "
+        "state, not a problem.\n"
     )
 
     def poll_fn():
@@ -400,6 +470,7 @@ def run(
         sink=TrackSink(log_file, log_url, log_token),
         now_fn=lambda: datetime.now(tz=tz),
         max_runtime_minutes=max_runtime_minutes,
+        quiet=quiet,
         debug=debug,
     )
     _print_summary(result)
@@ -413,7 +484,7 @@ if __name__ == "__main__":
             "-search_schedule_from HH:MM -search_schedule_to HH:MM "
             "[-route_id ROUTE_ID] [-search_schedule_tz TZ] "
             "[-log_file PATH] [-log_url URL] [-log_token TOKEN] "
-            "[-max_runtime_minutes N] [-debug]"
+            "[-max_runtime_minutes N] [-quiet] [-debug]"
         ),
     )
     _ = parser.add_argument(
@@ -470,8 +541,18 @@ if __name__ == "__main__":
         ),
     )
     _ = parser.add_argument(
+        "-quiet", action="store_true", default=False,
+        help=(
+            "Only print significant events (a new estimate, the bus leaving the "
+            "feed), not the unchanged polls in between."
+        ),
+    )
+    _ = parser.add_argument(
         "-debug", action="store_true", default=False,
-        help="Print a line for every poll.",
+        help=(
+            "Additionally dump every ETA the feed returned on each poll. Use this "
+            "to see whether the search window is admitting a second bus."
+        ),
     )
 
     args = parser.parse_args()
@@ -496,5 +577,6 @@ if __name__ == "__main__":
         log_url=args.log_url,
         log_token=args.log_token,
         max_runtime_minutes=args.max_runtime_minutes,
+        quiet=args.quiet,
         debug=args.debug,
     )

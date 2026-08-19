@@ -572,7 +572,37 @@ Start it roughly an hour ahead of the bus you want. It exits on its own.
 | `-log_url` | No | — | Arrivals ingest endpoint. Independent of `-log_file`; **use both**. |
 | `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token for `-log_url`. |
 | `-max_runtime_minutes` | No | `180` | Safety cap so a never-vanishing target cannot loop forever. |
-| `-debug` | No | off | Print a line for every poll. |
+| `-quiet` | No | off | Only print significant events, not the unchanged polls in between. |
+| `-debug` | No | off | Additionally dump every ETA the feed returned on each poll. |
+
+### Output
+
+One line per poll, on stdout, flushed immediately so a redirected run shows progress in real time rather than in buffered bursts. A row is only written when the ETA changes, so **"unchanged, no write" is the normal steady state** — it confirms the poll happened and that nothing needed doing:
+
+```
+  12:50:00  poll 4    ETA 13:42:00 (+52.0m)  ACQUIRED → row written  ·  next in 60s
+  12:51:00  poll 5    ETA 13:42:00 (+51.0m)  unchanged, no write  [seen 2x]  ·  next in 60s
+  13:25:00  poll 39   ETA 13:45:30 (+20.5m)  CHANGED from 13:42:00 → row written  ·  next in 60s
+  13:47:45  poll 76   ETA 13:47:00 (-0.8m)  unchanged, no write (overdue, still listed)  [seen 16x]  ·  next in 15s
+  13:49:00  poll 81   GONE from feed — tracking complete
+```
+
+Each line carries the poll's own clock time, a running poll number, the current ETA with minutes remaining (negative once overdue), whether a row was written, and when the next poll is due — so a stalled run is obvious from the timestamps alone.
+
+Before the bus appears, the line names the window, which makes a wrong `-seq` or window visible on the first poll:
+
+```
+  12:47:00  poll 1    waiting — nothing in 13:40–13:50 yet  ·  next in 60s
+```
+
+`-quiet` keeps only the significant events — acquire, each change, failed polls, and the exit — for cron logs you do not want filling up. Failed polls are reported even under `-quiet`, since they are not a normal state.
+
+`-debug` adds every ETA the feed returned beneath each poll line. That is what shows whether the window is admitting a second bus:
+
+```
+  12:50:00  poll 4    ETA 13:42:00 (+52.0m)  ACQUIRED → row written  ·  next in 60s
+              feed: 2026-08-20T13:42:00+08:00, 2026-08-20T14:20:00+08:00
+```
 
 ### Poll schedule
 
@@ -612,9 +642,13 @@ python track_bus_arrival.py -seq 8 \
     -log_file ~/bus_track.log \
     -log_url https://hk-bus-alarm-chart.iteneti.top/api/arrivals/ingest
 
-# Watch every poll while testing
+# Inspect the whole feed while testing a window
 python track_bus_arrival.py -seq 8 \
     -search_schedule_from 13:40 -search_schedule_to 13:50 -debug
+
+# Significant events only, for a cron log
+python track_bus_arrival.py -seq 8 \
+    -search_schedule_from 13:40 -search_schedule_to 13:50 -quiet
 ```
 
 On Android, hold a wake lock or the polls stop when the screen goes off:
