@@ -114,6 +114,23 @@ When `-search_schedule_from`/`-search_schedule_to` are also set:
 - **Match found** — only the matched entry is shown, labelled `Matched schedule`.
 - **No match** — replaced with: `No bus schedule found between 14:00 and 15:00 (tz +08:00).`
 
+**The detail block deliberately lists more entries than the ETA column.** The two answer different questions: the column is *buses you can still catch*, the detail block is *everything the API returned*. A bus that departed seconds before the query still appears in the detail block and is correctly absent from the column — that is the intended behaviour, not a mismatch.
+
+```
+  ETA   2026-08-19T13:45:32+08:00 (13m),  2026-08-19T14:00:32+08:00 (28m)
+
+  ETA entry 1 of 3
+  eta      : 2026-08-19T13:31:28+08:00      ← already departed; column-only omission
+  ETA entry 2 of 3
+  eta      : 2026-08-19T13:45:32+08:00
+  ETA entry 3 of 3
+  eta      : 2026-08-19T14:00:32+08:00
+```
+
+The raw dump is left unfiltered on purpose: when an alarm fires for the wrong bus, what the operator API actually said is the thing worth having intact.
+
+The only entry that survives the column's cutoff after its ETA has passed is a schedule-search match, which keeps its ` *` as described above.
+
 ### Examples
 
 ```bash
