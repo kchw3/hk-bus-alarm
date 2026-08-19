@@ -28,3 +28,39 @@ CREATE INDEX IF NOT EXISTS idx_schedule_log_ts_epoch
 
 CREATE INDEX IF NOT EXISTS idx_schedule_log_route_eta
     ON schedule_log (route_id, eta_epoch);
+
+
+-- Arrival tracking (track_bus_arrival.py). One row per distinct ETA value seen
+-- during one tracking session, NOT one row per poll: an unchanged estimate
+-- advances last_seen and polls on the existing row.
+--
+-- The final row of a session is what deduces the arrival. eta_iso is the last
+-- estimate the operator published, and last_seen is the last moment the bus was
+-- still listed — an upper bound, because the feed keeps showing an overdue bus
+-- with an ETA in the past until it is gone.
+CREATE TABLE IF NOT EXISTS arrival_track (
+    -- '<route_id>|<seq>|<run start ISO>'. Deterministic, so replaying a log
+    -- upserts instead of duplicating.
+    session_id       TEXT    NOT NULL,
+    route_id         TEXT    NOT NULL,
+    seq              INTEGER NOT NULL,
+    -- One distinct ETA value observed, e.g. '2026-08-19T13:45:32+08:00'.
+    eta_iso          TEXT    NOT NULL,
+    eta_epoch        INTEGER NOT NULL,
+    -- Poll timestamps bracketing the period this estimate was published.
+    first_seen       TEXT    NOT NULL,
+    first_seen_epoch INTEGER NOT NULL,
+    last_seen        TEXT    NOT NULL,
+    last_seen_epoch  INTEGER NOT NULL,
+    polls            INTEGER NOT NULL DEFAULT 1,
+    -- Search window this session tracked, for context when reading raw rows.
+    window_from      TEXT    NOT NULL DEFAULT '',
+    window_to        TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (session_id, eta_iso)
+);
+
+CREATE INDEX IF NOT EXISTS idx_arrival_track_session
+    ON arrival_track (session_id);
+
+CREATE INDEX IF NOT EXISTS idx_arrival_track_route_eta
+    ON arrival_track (route_id, eta_epoch);

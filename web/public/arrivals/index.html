@@ -3,10 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HK Bus Schedule History</title>
+<title>HK Bus Arrival Tracking</title>
 <style>
-  /* Palette roles (dataviz reference palette). Dark mode is a selected set of
-     steps for the dark surface, not an automatic flip. */
+  /* Same palette roles as the schedule chart, so the two pages read as one site. */
   :root {
     color-scheme: light;
     --surface-0: #f4f3f0;
@@ -63,6 +62,8 @@
   header { margin-bottom: 20px; }
   h1 { margin: 0 0 4px; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
   .sub { margin: 0; color: var(--text-secondary); font-size: 14px; }
+  .nav { margin: 0 0 14px; font-size: 13px; }
+  .nav a { color: var(--series-1); }
 
   .controls {
     display: flex;
@@ -97,6 +98,19 @@
   .msg { padding: 48px 16px; text-align: center; color: var(--text-secondary); }
   .msg.error { color: var(--series-8); }
 
+  .legendnote {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+    margin: 14px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .legendnote b { font-weight: 600; }
+  .swatch { font-weight: 700; margin-right: 5px; }
+
   details { margin-top: 20px; }
   summary { cursor: pointer; color: var(--text-secondary); font-size: 14px; }
   .tablewrap { overflow-x: auto; margin-top: 12px; }
@@ -107,16 +121,14 @@
 
   footer { margin-top: 24px; color: var(--text-muted); font-size: 12px; }
   code { font-size: 12px; }
-  .nav { margin: 0 0 14px; font-size: 13px; }
-  .nav a { color: var(--series-1); }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <p class="nav"><a href="/arrivals/">Arrival tracking →</a></p>
+    <p class="nav"><a href="/">← Schedule history</a></p>
 
     <header>
-      <h1>HK Bus Schedule History</h1>
+      <h1>HK Bus Arrival Tracking</h1>
       <p class="sub" id="subtitle">Loading…</p>
     </header>
 
@@ -127,15 +139,21 @@
         <button type="button" data-days="0" aria-pressed="true">All</button>
       </div>
       <label class="toggle">
-        <input type="checkbox" id="showPolls">
-        Show every poll, not just the final schedule of each day
+        <input type="checkbox" id="showEstimates" checked>
+        Show every estimate, not just the final one
       </label>
     </div>
 
     <div class="card">
       <div id="chart"></div>
-      <div class="msg" id="message">Loading schedule history…</div>
+      <div class="msg" id="message">Loading arrival tracks…</div>
     </div>
+
+    <ul class="legendnote">
+      <li><span class="swatch" style="color: var(--series-3)">✕</span><b>Every estimate</b> — each distinct ETA published while the bus approached. The earliest is the lower bound.</li>
+      <li><span class="swatch" style="color: var(--series-1)">✕</span><b>Final estimate</b> — the last ETA before the bus left the feed.</li>
+      <li><span class="swatch" style="color: var(--series-8)">✕</span><b>Last sighting</b> — the last poll that still listed the bus, once overdue. The upper bound.</li>
+    </ul>
 
     <details id="tableView" hidden>
       <summary>Table view</summary>
@@ -143,7 +161,13 @@
         <table>
           <thead>
             <tr>
-              <th>Date</th><th>Route</th><th title="ETA from the last poll of the day">Schedule</th><th title="Alarm set by the first poll of the day">Alarm</th><th>Polls</th><th title="Timestamp of the last poll">Logged at</th><th title="Why the first poll chose that alarm time">Reason</th>
+              <th>Date</th><th>Route</th><th>Stop</th>
+              <th title="First ETA published for this bus">First estimate</th>
+              <th title="Last ETA published before the bus left the feed">Final estimate</th>
+              <th title="Last poll that still listed the bus">Last sighting</th>
+              <th title="Final estimate minus first estimate">Drift</th>
+              <th title="Distinct ETA values observed">Estimates</th>
+              <th title="Total polls across the session">Polls</th>
             </tr>
           </thead>
           <tbody id="tableBody"></tbody>
@@ -152,16 +176,16 @@
     </details>
 
     <footer>
-      Each point is the schedule selected by <code>find_schedule()</code> — the latest
-      ETA inside the search window — as logged by <code>set_alarm_with_bus_eta.py</code>.
-      In the table, <strong>Schedule</strong> is the last poll of that day and
-      <strong>Alarm</strong> is the one set by the first poll: later runs are clamped to
-      <code>now + 2m</code>, so their alarm times only track the clock.
-      Shaded columns are weekends (Saturday and Sunday).
+      Each column is one tracking session from <code>track_bus_arrival.py</code>, which
+      polls a single stop until the bus disappears from the operator feed. The API never
+      publishes an actual arrival, so it is bracketed: the dotted line runs from the
+      <strong>first estimate</strong> (lower bound) to the <strong>last sighting</strong>
+      (upper bound), with every later estimate in between. A session with no red marker
+      vanished before going overdue, so it has no overdue sighting to bound it.
     </footer>
   </div>
 
-  <script src="./vendor/plotly-basic.min.js"></script>
+  <script src="../vendor/plotly-basic.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

@@ -44,6 +44,23 @@ set_alarm_with_bus_eta.py --POST /api/ingest--> Worker --> D1 (schedule_log)
 
 API details are in README.md; the full Cloudflare setup (D1, ingest token, GitHub auto-deploy via Workers Builds, custom domain `hk-bus-alarm-chart.iteneti.top`) is in DEPLOYMENT.md.
 
+## Arrival tracking (`track_bus_arrival.py`, `/arrivals/`)
+
+```
+track_bus_arrival.py --POST /api/arrivals/ingest--> Worker --> D1 (arrival_track)
+        |                                              |
+        +-- also appends the local CSV                 +-- GET /api/arrivals/data.json
+                                                       +-- static page: /arrivals/
+```
+
+The API never publishes an arrival, so it is bracketed rather than measured: the **first published ETA** (lower bound, earliest green mark) up to the **last poll that still listed the bus** (upper bound, red), with the **last published ETA** (blue) inside it. The dotted connector spans first-green to red, not blue to red. Everything else follows from that.
+
+- **The loop** — polls every 60s, every 15s once the ETA is within 3 minutes. Two `None` results from `find_schedule()` mean opposite things and must stay distinguished: before the first match it means "not in the feed yet, keep waiting"; after it, "the bus is gone, stop". A failed poll returns `None` from `poll_fn` — deliberately a third state meaning "no information", so a network blip cannot end a track early. `run_tracking()` takes injectable `now_fn`/`sleep_fn`/`poll_fn`; keep it that way, it is the only reason the loop is testable without waiting an hour.
+- **Overdue entries are load-bearing here.** `find_schedule()` has no past filter, so an overdue bus keeps matching its window — which is what makes the upper bound observable at all. Adding a `not_before` filter to `find_schedule()` would silently break this feature, not just change a display.
+- **One row per distinct ETA, not per poll.** An unchanged estimate advances `last_seen`/`polls` in memory; the row is rewritten only when the ETA changes and once more on exit. That final flush (in a `finally`, with SIGTERM/SIGINT raising through) is the *only* thing that records the last sighting, because an overdue ETA stops changing. Ingest upserts with `MIN(first_seen)`/`MAX(last_seen)` so a replay widens the bracket and can never narrow it.
+- **Target identity** — selection is plain `find_schedule()` every poll, no bespoke matching. Since it returns the *latest* entry in the window, a wide window can move the target mid-track; the mitigation is a narrow window, and the tracker warns on a forward jump over 10 minutes rather than absorbing it silently.
+- **The page** (`web/public/arrivals/`) shares the Worker, the D1 database, the `INGEST_TOKEN` and the deploy pipeline. It fetches `/api/arrivals/data.json` by absolute path — it sits one level down, so the main page's relative `./api/…` idiom would resolve wrongly. Setup is in DEPLOYMENT-ARRIVALS.md.
+
 ## Architecture
 
 Single-file script (`bus_route_info.py`). Key layers:

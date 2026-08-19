@@ -49,6 +49,13 @@ are about to miss is still the bus you wanted — or whether `find_schedule()`
 should take an optional `not_before` so callers can ask for genuinely catchable
 departures only.
 
+**Since this was written, a second caller now depends on the current
+behaviour.** `track_bus_arrival.py` keeps polling an overdue bus precisely
+*because* `find_schedule()` still returns it, and that is what makes the "last
+sighting" upper bound observable — the entry leaving the feed is the tracker's
+stop condition. Any `not_before` filter must therefore be opt-in per call, never
+a change to the default, or arrival tracking stops working.
+
 Deferred because it changes *which bus gets picked*, not how one is displayed,
 and it would alter `set_alarm_with_bus_eta.py` behaviour. Deciding it needs a
 look at real logged data: how often does `81.log` show a `clamped to now+2m`

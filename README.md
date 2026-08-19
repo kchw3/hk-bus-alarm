@@ -27,8 +27,12 @@ pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 | `add_bus_schedule_to_calendar.py` | CLI to find a bus schedule and create a Google Calendar event |
 | `bus_log_lib.py` | Schedule-log library (CSV row writer, ingest-endpoint uploader) |
 | `backfill_log.py` | CLI to upload an existing CSV log to the chart ingest endpoint |
-| `web/` | Cloudflare Worker + static page publishing the schedule history as a chart |
+| `track_bus_arrival.py` | Poll one stop until the bus arrives, to deduce its actual arrival time |
+| `bus_track_lib.py` | Arrival-tracking record type (CSV row and ingest payload) |
+| `backfill_track_log.py` | CLI to upload an existing CSV track log to the arrivals endpoint |
+| `web/` | Cloudflare Worker + static pages publishing both charts |
 | `DEPLOYMENT.md` | Step-by-step Cloudflare setup, GitHub auto-deploy, and custom domain |
+| `DEPLOYMENT-ARRIVALS.md` | Setup for the arrival tracking table, endpoints and chart |
 
 ---
 
@@ -529,6 +533,114 @@ python backfill_log.py 81.log -log_url https://hk-bus-alarm-chart.iteneti.top/ap
 
 ---
 
+## track_bus_arrival.py
+
+Polls one stop until the tracked bus disappears from the operator feed, to deduce when it actually arrived.
+
+### Why it has to be deduced
+
+The API never publishes an arrival. It publishes a handful of ETAs for the next hour, revises them as the bus approaches, and drops an entry once the bus has gone. So the arrival is *bracketed* rather than measured:
+
+- **First published ETA** — the lower bound of the bracket, and the earliest of the green marks.
+- **Last published ETA** — the final estimate before the entry vanished, marked blue.
+- **Last sighting** — the clock time of the last poll that still listed the bus, marked red. Once a bus is overdue the feed keeps showing it with an ETA in the past, so this is the upper bound.
+
+The bracket runs from the first estimate to the last sighting, with every later estimate inside it. All of them are recorded; a single number would hide how wide the bracket was and how far the estimate drifted.
+
+### Usage
+
+```
+python track_bus_arrival.py -seq N
+    -search_schedule_from HH:MM -search_schedule_to HH:MM
+    [-route_id ROUTE_ID] [-search_schedule_tz TZ]
+    [-log_file PATH] [-log_url URL] [-log_token TOKEN]
+    [-max_runtime_minutes N] [-debug]
+```
+
+Start it roughly an hour ahead of the bus you want. It exits on its own.
+
+### Parameters
+
+| Flag | Required | Default | Description |
+|---|---|---|---|
+| `-seq` | **Yes** | — | Stop number (1-based) to track. |
+| `-search_schedule_from` | **Yes** | — | Start of the window identifying the bus. |
+| `-search_schedule_to` | **Yes** | — | End of that window. Keep it narrow — see below. |
+| `-route_id` | No | Route 81 | Route ID. |
+| `-search_schedule_tz` | No | `+08:00` | `local` or a fixed offset. |
+| `-log_file` | No | — | CSV track log. One row per distinct ETA value. |
+| `-log_url` | No | — | Arrivals ingest endpoint. Independent of `-log_file`; **use both**. |
+| `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token for `-log_url`. |
+| `-max_runtime_minutes` | No | `180` | Safety cap so a never-vanishing target cannot loop forever. |
+| `-debug` | No | off | Print a line for every poll. |
+
+### Poll schedule
+
+| Phase | Rate |
+|---|---|
+| Waiting for the bus to appear in the feed | every 60s |
+| Tracking, ETA more than 3 minutes out | every 60s |
+| ETA within 3 minutes, **including once overdue** | every 15s |
+
+### How the bus is selected
+
+Exactly the same mechanism as every other script here — `find_schedule()` with the window from `-search_schedule_from`/`-to`. Three consequences worth knowing:
+
+- **The acquire phase is not a stop condition.** An hour ahead the bus is usually not in the feed yet, so no match simply means keep waiting.
+- **Overdue is not a stop condition.** `find_schedule()` has no past filter, so an overdue bus keeps matching its window — which is exactly what makes the "last sighting" bound observable. Tracking ends only when the entry leaves the feed.
+- **Keep the window narrow.** `find_schedule()` returns the *latest* ETA inside the window, so a window wide enough to admit a second bus can move the target mid-track. The tracker warns on stderr when the selected ETA jumps forward by more than 10 minutes, which is the signature of that happening.
+
+A failed poll (network error) is treated as *no information*, deliberately not as "the bus is gone", so a transient outage cannot end a track early.
+
+### Logging
+
+One row per **distinct ETA value**, not per poll: an unchanged estimate advances `last_seen` and `polls` on the existing row. A final row is flushed on exit — including on Ctrl-C or `kill` — which is what captures the last sighting, since an overdue ETA stops changing and would otherwise never be rewritten.
+
+Rows for the same `(session_id, eta_iso)` supersede each other, and ingest widens the bracket rather than overwriting it, so replaying a log is always safe.
+
+### Examples
+
+```bash
+# Track the bus due between 13:40 and 13:50 at stop 8
+python track_bus_arrival.py -seq 8 \
+    -search_schedule_from 13:40 -search_schedule_to 13:50 \
+    -log_file ~/bus_track.log
+
+# Also upload to the arrivals chart (token from $BUS_LOG_TOKEN)
+python track_bus_arrival.py -seq 8 \
+    -search_schedule_from 13:40 -search_schedule_to 13:50 \
+    -log_file ~/bus_track.log \
+    -log_url https://hk-bus-alarm-chart.iteneti.top/api/arrivals/ingest
+
+# Watch every poll while testing
+python track_bus_arrival.py -seq 8 \
+    -search_schedule_from 13:40 -search_schedule_to 13:50 -debug
+```
+
+On Android, hold a wake lock or the polls stop when the screen goes off:
+
+```bash
+termux-wake-lock
+nohup python track_bus_arrival.py ... > ~/track.out 2>&1 &
+```
+
+---
+
+## backfill_track_log.py
+
+Uploads an existing CSV track log to the arrivals ingest endpoint. Same shape as `backfill_log.py`:
+
+```bash
+python backfill_track_log.py ~/bus_track.log \
+    -log_url https://hk-bus-alarm-chart.iteneti.top/api/arrivals/ingest -dry_run
+python backfill_track_log.py ~/bus_track.log \
+    -log_url https://hk-bus-alarm-chart.iteneti.top/api/arrivals/ingest
+```
+
+Ingest upserts on `(session_id, eta_iso)`, so re-running is harmless.
+
+---
+
 ## web/ — schedule history chart
 
 A Cloudflare Worker that stores uploaded records in D1 and serves a public, no-login, interactive chart of them.
@@ -546,9 +658,10 @@ A Cloudflare Worker that stores uploaded records in D1 and serves a public, no-l
 | Path | Purpose |
 |---|---|
 | `web/wrangler.jsonc` | Worker config: static assets, D1 binding |
-| `web/schema.sql` | `schedule_log` table |
-| `web/src/index.js` | `POST /api/ingest`, `GET /api/data.json`, static assets |
+| `web/schema.sql` | `schedule_log` and `arrival_track` tables |
+| `web/src/index.js` | the four API routes, plus static assets |
 | `web/public/` | `index.html`, `app.js`, vendored `plotly-basic.min.js` |
+| `web/public/arrivals/` | the arrival tracking page and its `app.js` |
 
 ### API
 
@@ -556,6 +669,30 @@ A Cloudflare Worker that stores uploaded records in D1 and serves a public, no-l
 |---|---|---|
 | `POST /api/ingest` | `Authorization: Bearer <INGEST_TOKEN>` | Accepts one record object or an array (max 500, 256 KB). Upserts on `(timestamp, route_id)`. |
 | `GET /api/data.json` | None | All records with a schedule, oldest first. Optional `?days=N` and `?route=<route_id>`. Cached 60s. |
+| `POST /api/arrivals/ingest` | Same token | Arrival-tracking observations. Upserts on `(session_id, eta_iso)`, widening the observation bracket rather than overwriting it. |
+| `GET /api/arrivals/data.json` | None | All tracked estimates, grouped by session. Optional `?days=N`, `?route=`, `?session=`. Cached 60s. |
+
+Both ingest endpoints share the `INGEST_TOKEN` secret and the same size guards; they differ only in the table they write.
+
+### /arrivals/ — arrival tracking chart
+
+Same axes as the schedule chart, one vertical column of markers per tracked bus:
+
+| Marker | Meaning |
+|---|---|
+| green `✕` | every distinct ETA published as the bus approached; the earliest is the **lower bound** |
+| blue `✕` | the last of those — the final estimate before the bus vanished |
+| red `✕` | the last poll that still listed the bus, once overdue — the **upper bound** |
+
+A dotted connector spans the bracket, from the first estimate up to the last sighting, so the column reads as one interval with the estimates inside it. A session with **no red marker** left the feed before its ETA elapsed, so it has no overdue sighting to bound it — shown as missing rather than guessed at.
+
+Setup is in **[DEPLOYMENT-ARRIVALS.md](DEPLOYMENT-ARRIVALS.md)**. It needs no new Worker, secret, domain or deploy pipeline — only the `arrival_track` table.
+
+### Clearing out test data
+
+Neither chart has a delete button — the pages are public and read-only by design. Purging is done against D1 directly, with ready-made SQL for both tables under **Purging data** in [DEPLOYMENT.md](DEPLOYMENT.md#purging-data) (`schedule_log`) and [DEPLOYMENT-ARRIVALS.md](DEPLOYMENT-ARRIVALS.md#purging-data) (`arrival_track`): purge everything, one route, one day, one tracking session, or anything older than N days.
+
+Two things to remember afterwards: the JSON endpoints are cached for 60 seconds, so the chart can lag a purge by up to a minute; and replaying a device CSV with `backfill_log.py` / `backfill_track_log.py` puts the rows straight back, since ingest upserts on a deterministic key.
 
 ### Storage: why D1 and not KV
 

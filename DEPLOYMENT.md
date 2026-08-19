@@ -191,6 +191,103 @@ Live request logs: *Workers & Pages → hk-bus-alarm-chart → Logs*, or `npx wr
 
 ---
 
+## Purging data
+
+For clearing out POC or test data. **There is no undo** — D1 has no soft delete
+and the Worker never writes a tombstone, so anything removed here is gone unless
+you still hold the device CSV.
+
+Run these in the **dashboard D1 console** (*Storage & Databases → D1 →
+`hk-bus-alarm` → Console*), or with
+`cd web && npx wrangler d1 execute hk-bus-alarm --remote --command "<SQL>"`.
+
+### Take a backup first
+
+```bash
+cd web
+npx wrangler d1 export hk-bus-alarm --remote --output ./schedule-backup.sql
+```
+
+The device CSV (`-log_file`) is the other copy. If it is intact you can always
+rebuild the table with `backfill_log.py`, which is usually the faster recovery.
+
+### Look before you delete
+
+Every purge below has a matching `SELECT` — run it first and check the count is
+what you expect. `DELETE` reports rows affected, but by then it has happened.
+
+```sql
+-- What is in there, by route and date
+SELECT route_id, substr(ts, 1, 10) AS day, COUNT(*) AS rows
+FROM schedule_log GROUP BY route_id, day ORDER BY day DESC;
+```
+
+### Purge everything
+
+```sql
+SELECT COUNT(*) FROM schedule_log;     -- check first
+DELETE FROM schedule_log;
+```
+
+### Purge one route
+
+```sql
+SELECT COUNT(*) FROM schedule_log WHERE route_id = 'test';
+DELETE FROM schedule_log WHERE route_id = 'test';
+```
+
+### Purge one day
+
+`ts` is stored with its `+08:00` offset, so a `substr` on the date prefix is the
+literal calendar day the run happened:
+
+```sql
+SELECT COUNT(*) FROM schedule_log WHERE substr(ts, 1, 10) = '2026-08-19';
+DELETE FROM schedule_log WHERE substr(ts, 1, 10) = '2026-08-19';
+```
+
+To purge by the *bus's* date rather than the run's date, use `eta_iso` instead of
+`ts` — these differ for a run just before midnight.
+
+### Purge older than N days
+
+`ts_epoch` exists precisely so this stays correct regardless of UTC offset:
+
+```sql
+-- older than 30 days
+SELECT COUNT(*) FROM schedule_log
+WHERE ts_epoch < (strftime('%s', 'now') - 30 * 86400) * 1000;
+
+DELETE FROM schedule_log
+WHERE ts_epoch < (strftime('%s', 'now') - 30 * 86400) * 1000;
+```
+
+Note the `* 1000`: the column is epoch **milliseconds**, `strftime('%s')` returns
+seconds. Getting this wrong makes the condition match everything.
+
+### Purge the rows that plot nothing
+
+Runs where no bus was found are stored but never charted. Harmless, but they
+inflate the row count while you are testing:
+
+```sql
+DELETE FROM schedule_log WHERE eta_iso = '';
+```
+
+### Afterwards
+
+- `GET /api/data.json` is cached for 60 seconds, so the chart can keep showing
+  deleted points for up to a minute. Hard-refresh if it looks stale.
+- No compaction step is needed — D1 manages its own storage. (Do not reach
+  for `VACUUM`: D1 restricts some SQLite statements, and nothing here depends
+  on it.)
+- **The device will re-upload.** Ingest upserts, so a later
+  `backfill_log.py` run over a CSV that still holds those rows puts them
+  straight back. Delete or move the local CSV too if you want them gone for
+  good.
+
+---
+
 ## Troubleshooting
 
 **`wrangler login` fails with `ECONNREFUSED …:8976`.** Wrangler opens that callback

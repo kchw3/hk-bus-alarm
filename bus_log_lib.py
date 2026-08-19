@@ -69,13 +69,17 @@ class LogRecord:
         }
 
 
-def write_log_csv(log_file: str, record: LogRecord) -> None:
-    """Append one CSV row to `log_file`, writing the header when the file is new or empty."""
+def write_log_csv(log_file: str, record, header: list[str] = CSV_HEADER) -> None:
+    """Append one CSV row to `log_file`, writing the header when the file is new or empty.
+
+    `record` is anything with a `csv_row()` matching `header`, so the arrival
+    tracker's `TrackRecord` reuses this by passing its own `TRACK_CSV_HEADER`.
+    """
     is_new = not os.path.exists(log_file) or os.path.getsize(log_file) == 0
     with open(log_file, "a", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         if is_new:
-            writer.writerow(CSV_HEADER)
+            writer.writerow(header)
         writer.writerow(record.csv_row())
 
 
