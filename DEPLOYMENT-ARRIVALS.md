@@ -79,6 +79,16 @@ second bus can move the target mid-track. The tracker warns on stderr if the
 selected ETA jumps forward by more than 10 minutes, which is the signature of
 exactly that.
 
+**But the window only identifies the bus — it does not bound the tracking.**
+Once a bus is acquired the tracker follows it up to `-track_grace_minutes`
+(default 5) past `-search_schedule_to`. That matters because a real ETA drifts:
+with `-search_schedule_to 07:29` and a bus estimated at 07:28:43, seventeen
+seconds of forward drift would otherwise push it outside the window, and the
+tracker would read "no longer matches" as "left the feed" — recording an arrival
+that never happened, with a last sighting *before* the ETA and so no red marker
+on the chart. Raise the grace for a route prone to long delays; lower it if a
+following bus keeps stealing the track.
+
 **Android will suspend a long-running process.** From Termux:
 
 ```bash
@@ -394,4 +404,14 @@ the window probably matched a bus that had already gone.
 
 **The final estimate looks like a different bus.** Look for the forward-jump
 warning on stderr. Narrow `-search_schedule_from`/`-to` so only one bus falls
-inside it.
+inside it, or lower `-track_grace_minutes` so a following bus cannot be picked up.
+
+**A run reported an arrival before the ETA had elapsed, and the chart shows no
+red marker.** The run summary says *"left the feed at HH:MM, before its final ETA
+of HH:MM elapsed"*. If the final ETA was close to `-search_schedule_to`, the bus
+probably never left the feed — its ETA drifted past the window edge and stopped
+matching. Check the poll lines for `[beyond window, grace applied]`; if the last
+estimate sat within a minute or two of the window edge and the grace was 0, raise
+`-track_grace_minutes` or move `-search_schedule_to` later. The `last_seen` value
+is still stored in D1 either way; it is only *drawn* when the bus was still
+listed after its own ETA.

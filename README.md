@@ -572,6 +572,7 @@ Start it roughly an hour ahead of the bus you want. It exits on its own.
 | `-log_url` | No | — | Arrivals ingest endpoint. Independent of `-log_file`; **use both**. |
 | `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token for `-log_url`. |
 | `-max_runtime_minutes` | No | `180` | Safety cap so a never-vanishing target cannot loop forever. |
+| `-track_grace_minutes` | No | `5` | Once acquired, follow the bus up to N minutes past `-search_schedule_to`. |
 | `-quiet` | No | off | Only print significant events, not the unchanged polls in between. |
 | `-debug` | No | off | Additionally dump every ETA the feed returned on each poll. |
 
@@ -619,6 +620,9 @@ Exactly the same mechanism as every other script here — `find_schedule()` with
 - **The acquire phase is not a stop condition.** An hour ahead the bus is usually not in the feed yet, so no match simply means keep waiting.
 - **Overdue is not a stop condition.** `find_schedule()` has no past filter, so an overdue bus keeps matching its window — which is exactly what makes the "last sighting" bound observable. Tracking ends only when the entry leaves the feed.
 - **Keep the window narrow.** `find_schedule()` returns the *latest* ETA inside the window, so a window wide enough to admit a second bus can move the target mid-track. The tracker warns on stderr when the selected ETA jumps forward by more than 10 minutes, which is the signature of that happening.
+- **The window identifies the bus; it does not bound the tracking.** Once a bus is acquired the matching window follows it, up to `-track_grace_minutes` (default 5) past `-search_schedule_to`. Without that, a bus whose ETA drifts a few seconds past the window edge simply stops matching, and the tracker reads that as "left the feed" — reporting an arrival that never happened and losing the overdue sighting that bounds it. A run where the grace mattered says so on the poll line (`[beyond window, grace applied]`) and again in the summary.
+
+The grace re-anchors on every new estimate, so a bus delayed repeatedly in small steps is followed indefinitely, while a single jump larger than the grace ends the track rather than silently switching to a different bus.
 
 A failed poll (network error) is treated as *no information*, deliberately not as "the bus is gone", so a transient outage cannot end a track early.
 

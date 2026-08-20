@@ -17,7 +17,7 @@ Usage:
         -search_schedule_from HH:MM -search_schedule_to HH:MM
         [-route_id ROUTE_ID] [-search_schedule_tz TZ]
         [-log_file PATH] [-log_url URL] [-log_token TOKEN]
-        [-max_runtime_minutes N] [-quiet] [-debug]
+        [-max_runtime_minutes N] [-track_grace_minutes N] [-quiet] [-debug]
 
 Examples:
     # Start about an hour ahead and track the bus due between 13:40 and 13:50
@@ -34,6 +34,11 @@ Examples:
 Keep the window narrow. The schedule is selected with find_schedule(), which
 returns the LATEST ETA inside the window, so a window wide enough to admit a
 second bus can move the target mid-track.
+
+The window IDENTIFIES the bus; it does not bound the tracking. Once a bus has
+been acquired the matching window follows it, up to -track_grace_minutes past
+-search_schedule_to, so ordinary forward drift cannot be mistaken for the bus
+leaving the feed.
 
 Requires:
     pip install hk-bus-eta
@@ -72,6 +77,12 @@ FAST_WINDOW_SECONDS = 180
 #: A forward jump larger than this suggests find_schedule() has moved to a later
 #: bus rather than the tracked one being delayed. Warned about, not acted on.
 TARGET_JUMP_WARN_SECONDS = 600
+#: Once a bus has been acquired, the matching window's upper bound follows it by
+#: this much. Without it a bus whose ETA drifts past `-search_schedule_to` stops
+#: matching, and the tracker reads that as "left the feed" — reporting an arrival
+#: that never happened and losing the overdue sighting that bounds it. The window
+#: identifies the target; it must not also terminate the track.
+DEFAULT_TRACK_GRACE_MINUTES = 5
 DEFAULT_MAX_RUNTIME_MINUTES = 180
 
 
@@ -152,6 +163,9 @@ class TrackResult:
     outcome: str
     final: TrackRecord | None
     polls: int
+    #: True when the tracked ETA ended up past `-search_schedule_to`, i.e. the
+    #: tracking grace is the only reason the run did not stop early.
+    beyond_window: bool = False
 
 
 def _poll_interval(now: datetime, eta_dt: datetime | None) -> int:
@@ -205,6 +219,7 @@ def run_tracking(
     now_fn,
     sleep_fn=time.sleep,
     max_runtime_minutes: int = DEFAULT_MAX_RUNTIME_MINUTES,
+    track_grace_minutes: int = DEFAULT_TRACK_GRACE_MINUTES,
     quiet: bool = False,
     debug: bool = False,
     out=_emit,
@@ -229,6 +244,7 @@ def run_tracking(
     deadline = started + timedelta(minutes=max_runtime_minutes)
     window_from = from_dt.isoformat(timespec="seconds")
     window_to = to_dt.isoformat(timespec="seconds")
+    grace = timedelta(minutes=track_grace_minutes)
 
     current: TrackRecord | None = None
     current_eta_dt: datetime | None = None
@@ -259,13 +275,24 @@ def run_tracking(
                 sleep_fn(wait)
                 continue
 
-            found = find_schedule(etas, from_dt, to_dt)
+            # The window identifies the target; once it has, the upper bound
+            # follows the bus so ordinary forward drift cannot end the track.
+            # Before acquisition this is exactly `to_dt`, so selection of *which*
+            # bus to track is unchanged.
+            match_to = to_dt
+            if current_eta_dt is not None:
+                match_to = max(to_dt, current_eta_dt + grace)
+            found = find_schedule(etas, from_dt, match_to)
             poll_ts = now.isoformat(timespec="seconds")
 
             if found is None:
                 if acquired:
                     # The entry left the feed: the bus has gone.
-                    out(_progress(now, polls, "GONE from feed — tracking complete"))
+                    out(_progress(
+                        now, polls,
+                        f"GONE from feed (searched to {match_to.strftime('%H:%M:%S')}) "
+                        "— tracking complete",
+                    ))
                     outcome = "arrived"
                     break
                 if not quiet:
@@ -316,9 +343,13 @@ def run_tracking(
                     "ACQUIRED" if was is None
                     else f"CHANGED from {was.strftime('%H:%M:%S')}"
                 )
+                # Say so whenever the grace is what kept this estimate matchable
+                # — that is the signal the search window is too tight, and the
+                # only point at which a following bus could have been picked up.
+                beyond = " [beyond window, grace applied]" if eta_dt > to_dt else ""
                 out(_progress(
                     now, polls,
-                    f"{_eta_note(eta_dt, now)}  {change} → row written",
+                    f"{_eta_note(eta_dt, now)}  {change} → row written{beyond}",
                     _poll_interval(now, eta_dt),
                 ))
             else:
@@ -344,7 +375,13 @@ def run_tracking(
         if current is not None and dirty:
             sink.emit(current)
 
-    return TrackResult(session_id=session_id, outcome=outcome, final=current, polls=polls)
+    return TrackResult(
+        session_id=session_id,
+        outcome=outcome,
+        final=current,
+        polls=polls,
+        beyond_window=current_eta_dt is not None and current_eta_dt > to_dt,
+    )
 
 
 def _print_summary(result: TrackResult, out=print) -> None:
@@ -373,6 +410,13 @@ def _print_summary(result: TrackResult, out=print) -> None:
         )
         return
 
+    if result.beyond_window:
+        out(
+            "\nNote: the final estimate drifted past -search_schedule_to. The tracking "
+            "grace\n      kept the track alive; without it this run would have reported "
+            "an arrival\n      the moment the ETA crossed the window edge."
+        )
+
     if last_seen > last_eta:
         overdue = (last_seen - last_eta).total_seconds() / 60
         out(
@@ -396,6 +440,7 @@ def run(
     log_url: str | None,
     log_token: str | None,
     max_runtime_minutes: int,
+    track_grace_minutes: int,
     quiet: bool,
     debug: bool,
 ) -> None:
@@ -447,6 +492,10 @@ def run(
         f"within {FAST_WINDOW_SECONDS // 60}m of the ETA. Ctrl-C to stop."
     )
     print(
+        f"Grace    : once acquired, followed up to {track_grace_minutes}m past "
+        f"{to_dt.strftime('%H:%M')}, so drift is not mistaken for arrival."
+    )
+    print(
         "           One line per poll below. A row is only written when the ETA "
         "changes,\n           so \"unchanged, no write\" is the normal steady "
         "state, not a problem.\n"
@@ -470,6 +519,7 @@ def run(
         sink=TrackSink(log_file, log_url, log_token),
         now_fn=lambda: datetime.now(tz=tz),
         max_runtime_minutes=max_runtime_minutes,
+        track_grace_minutes=track_grace_minutes,
         quiet=quiet,
         debug=debug,
     )
@@ -484,7 +534,7 @@ if __name__ == "__main__":
             "-search_schedule_from HH:MM -search_schedule_to HH:MM "
             "[-route_id ROUTE_ID] [-search_schedule_tz TZ] "
             "[-log_file PATH] [-log_url URL] [-log_token TOKEN] "
-            "[-max_runtime_minutes N] [-quiet] [-debug]"
+            "[-max_runtime_minutes N] [-track_grace_minutes N] [-quiet] [-debug]"
         ),
     )
     _ = parser.add_argument(
@@ -541,6 +591,16 @@ if __name__ == "__main__":
         ),
     )
     _ = parser.add_argument(
+        "-track_grace_minutes", type=int, default=DEFAULT_TRACK_GRACE_MINUTES, metavar="N",
+        help=(
+            f"Once a bus is acquired, follow it up to N minutes past "
+            f"-search_schedule_to (default: {DEFAULT_TRACK_GRACE_MINUTES}). Without "
+            "this an ETA drifting past the window edge reads as 'left the feed' and "
+            "the run reports an arrival that never happened. Raise it for a route "
+            "prone to long delays; lower it if a following bus keeps stealing the track."
+        ),
+    )
+    _ = parser.add_argument(
         "-quiet", action="store_true", default=False,
         help=(
             "Only print significant events (a new estimate, the bus leaving the "
@@ -565,6 +625,8 @@ if __name__ == "__main__":
         )
     if args.max_runtime_minutes < 1:
         parser.error("-max_runtime_minutes must be at least 1.")
+    if args.track_grace_minutes < 0:
+        parser.error("-track_grace_minutes cannot be negative.")
 
     run(
         query=RouteQuery(route_id=args.route_id, seq=args.seq),
@@ -577,6 +639,7 @@ if __name__ == "__main__":
         log_url=args.log_url,
         log_token=args.log_token,
         max_runtime_minutes=args.max_runtime_minutes,
+        track_grace_minutes=args.track_grace_minutes,
         quiet=args.quiet,
         debug=args.debug,
     )
