@@ -52,10 +52,12 @@ from hk_bus_common import (
     _offset,
     eta_to_datetime,
     find_schedule,
+    flatten_stops,
     format_eta_entry,
     format_eta_stamp,
     parse_hhmm,
     parse_tz,
+    stop_info,
     upcoming_etas,
 )
 from google_calendar_lib import get_calendar_service, create_calendar_event
@@ -162,23 +164,15 @@ def run(
                 print(f"  {m}")
         sys.exit(1)
 
-    stop_list = route.get("stops", {})
-    all_stops = [
-        (co, stop_id)
-        for co, ids in stop_list.items()
-        if isinstance(ids, list)
-        for stop_id in ids
-    ]
-    total = len(all_stops)
-
-    if query.seq < 1 or query.seq > total:
+    stop = stop_info(hketa, route, query.seq)
+    if stop is None:
+        total = len(flatten_stops(route))
         print(f"Error: -seq {query.seq} is out of range. Valid range is 1–{total}.")
         sys.exit(1)
 
-    co, stop_id = all_stops[query.seq - 1]
-    stop_data = hketa.stop_list.get(stop_id, {})
-    name_en = stop_data.get("name", {}).get("en", "—")
-    name_zh = stop_data.get("name", {}).get("zh", "—")
+    co, stop_id = stop.co, stop.stop_id
+    name_en, name_zh = stop.name_en, stop.name_zh
+    total = stop.total
 
     print(f"Stop {query.seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
 

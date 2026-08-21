@@ -1,12 +1,18 @@
 /**
  * Renders the logged bus schedules as date (x) vs time-of-day (y).
  *
- * Two traces per route:
+ * Two traces per series, where a series is one (route, stop) pair — NOT one
+ * route. Two stops of the same route are different buses at different times;
+ * grouping them together let a later record silently overwrite an earlier one
+ * in `perDateSummary()`.
+ *
  *   - "final"     one entry per date: the last logged schedule of that day, with the
  *                 alarm and reason from its first poll. Markers joined by a line, so
  *                 day-to-day drift reads as a trend.
  *   - "all polls" every logged schedule, faint x markers. Off by default.
  */
+
+import { preloadStops, seriesKey, seriesLabel, stopName } from "./stop-labels.js";
 
 const DATA_URL = "./api/data.json";
 
@@ -75,20 +81,31 @@ function hideMessage() {
   el.chart.style.display = "";
 }
 
-/** Group parsed points by route_id, preserving first-seen order for colour assignment. */
-function groupByRoute(records) {
-  const routes = new Map();
+/**
+ * Group parsed points into one series per (route_id, seq), preserving first-seen
+ * order for colour assignment.
+ *
+ * Keying on route_id alone would merge two stops of the same route into a single
+ * series, where `perDateSummary()` then keeps whichever record happened to come
+ * last for a date — reporting one stop's schedule under the other's name.
+ */
+function groupBySeries(records) {
+  const series = new Map();
   for (const record of records) {
     const eta = splitIso(record.eta_iso);
     if (!eta) {
       continue;
     }
     const logged = splitIso(record.timestamp);
-    if (!routes.has(record.route_id)) {
-      routes.set(record.route_id, []);
+    const key = seriesKey(record.route_id, record.seq);
+    if (!series.has(key)) {
+      series.set(key, []);
     }
-    routes.get(record.route_id).push({
+    series.get(key).push({
       route: record.route_id,
+      seq: record.seq,
+      label: seriesLabel(record.route_id, record.seq),
+      stop: stopName(record.route_id, record.seq),
       date: eta.date,
       clock: eta.clock,
       dummy: eta.dummy,
@@ -97,7 +114,7 @@ function groupByRoute(records) {
       reason: record.reason || "—",
     });
   }
-  return routes;
+  return series;
 }
 
 /**
@@ -147,7 +164,7 @@ const HOVER_TEMPLATE =
   "%{customdata[5]}<extra></extra>";
 
 function toCustomData(points) {
-  return points.map((p) => [p.route, p.date, p.clock, p.alarm, p.loggedAt, p.reason]);
+  return points.map((p) => [p.label, p.date, p.clock, p.alarm, p.loggedAt, p.reason]);
 }
 
 const GAP_DAYS = 2;
@@ -175,28 +192,31 @@ function seriesWithGaps(points) {
     }
     x.push(point.date);
     y.push(point.dummy);
-    customdata.push([point.route, point.date, point.clock, point.alarm, point.loggedAt, point.reason]);
+    customdata.push([point.label, point.date, point.clock, point.alarm, point.loggedAt, point.reason]);
   });
 
   return { x, y, customdata };
 }
 
-function buildTraces(routes) {
+function buildTraces(series) {
   const surface = cssVar("--surface-1");
   const traces = [];
   let slot = 0;
 
-  for (const [route, points] of routes) {
+  for (const [key, points] of series) {
     const color = cssVar(SERIES_VARS[slot % SERIES_VARS.length]);
     slot += 1;
+    // Every point in a series shares the label; the legend group must be the
+    // key, so two stops of one route stay separately toggleable.
+    const label = points[0].label;
 
     if (state.showPolls) {
       traces.push({
         type: "scatter",
         mode: "markers",
         name: "every poll",
-        legendgroup: route,
-        legendgrouptitle: { text: route },
+        legendgroup: key,
+        legendgrouptitle: { text: label },
         x: points.map((p) => p.date),
         y: points.map((p) => p.dummy),
         customdata: toCustomData(points),
@@ -210,8 +230,8 @@ function buildTraces(routes) {
       type: "scatter",
       mode: "lines+markers",
       name: "final schedule",
-      legendgroup: route,
-      legendgrouptitle: { text: route },
+      legendgroup: key,
+      legendgrouptitle: { text: label },
       x: finals.x,
       y: finals.y,
       customdata: finals.customdata,
@@ -325,9 +345,9 @@ const PLOT_CONFIG = {
   toImageButtonOptions: { filename: "bus-schedule-history", scale: 2 },
 };
 
-function renderTable(routes) {
+function renderTable(series) {
   const rows = [];
-  for (const [, points] of routes) {
+  for (const [, points] of series) {
     rows.push(...perDateSummary(points));
   }
   rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
@@ -336,7 +356,7 @@ function renderTable(routes) {
   for (const row of rows) {
     const tr = document.createElement("tr");
     for (const [value, dim] of [
-      [row.date, false], [row.route, false], [row.clock, false],
+      [row.date, false], [row.route, false], [row.stop, false], [row.clock, false],
       [row.alarm, false], [String(row.polls), true], [row.loggedAt, true], [row.reason, true],
     ]) {
       const td = document.createElement("td");
@@ -353,9 +373,9 @@ function renderTable(routes) {
 
 function render() {
   const records = withinRange(state.records, state.days);
-  const routes = groupByRoute(records);
+  const series = groupBySeries(records);
 
-  if (routes.size === 0) {
+  if (series.size === 0) {
     showMessage(
       state.days
         ? `No schedules logged in the last ${state.days} days.`
@@ -368,18 +388,21 @@ function render() {
 
   hideMessage();
   const dates = [...new Set(records.map((r) => (splitIso(r.eta_iso) || {}).date).filter(Boolean))].sort();
-  Plotly.react(el.chart, buildTraces(routes), buildLayout(dates), PLOT_CONFIG);
-  renderTable(routes);
+  Plotly.react(el.chart, buildTraces(series), buildLayout(dates), PLOT_CONFIG);
+  renderTable(series);
 }
 
 function updateSubtitle() {
-  const routes = new Set(state.records.map((r) => r.route_id));
+  const keys = new Set(state.records.map((r) => seriesKey(r.route_id, r.seq)));
   const last = state.records[state.records.length - 1];
   const logged = last ? splitIso(last.timestamp) : null;
-  const routeText = routes.size === 1 ? [...routes][0] : `${routes.size} routes`;
+  const seriesText =
+    keys.size === 1
+      ? seriesLabel(last.route_id, last.seq)
+      : `${keys.size} route/stop series`;
   el.subtitle.textContent = logged
-    ? `${routeText} · ${state.records.length} logged schedules · last run ${logged.date} ${logged.clock}`
-    : routeText;
+    ? `${seriesText} · ${state.records.length} logged schedules · last run ${logged.date} ${logged.clock}`
+    : seriesText;
 }
 
 function wireControls() {
@@ -426,6 +449,11 @@ async function main() {
     showMessage("No schedules logged yet.");
     return;
   }
+
+  // Labels are resolved synchronously inside the trace builders, so the stop
+  // metadata has to be in hand before the first render. A failure here is not
+  // fatal — preloadStops() resolves either way and labels fall back to "stop N".
+  await preloadStops(state.records.map((r) => r.route_id));
 
   updateSubtitle();
   wireControls();

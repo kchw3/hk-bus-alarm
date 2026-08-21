@@ -67,9 +67,11 @@ from hk_bus_common import (
     _offset,
     eta_to_datetime,
     find_schedule,
+    flatten_stops,
     format_eta_entry,
     parse_hhmm,
     parse_tz,
+    stop_info,
 )
 from bus_alarm_lib import DEFAULT_ALARM_LABEL, set_android_alarm
 from bus_log_lib import LOG_TOKEN_ENV, LogRecord, post_record, write_log_csv
@@ -161,27 +163,18 @@ def run(
                     print(f"  {m}")
         sys.exit(1)
 
-    stop_list = route.get("stops", {})
-    all_stops = [
-        (co, stop_id)
-        for co, ids in stop_list.items()
-        if isinstance(ids, list)
-        for stop_id in ids
-    ]
-    total = len(all_stops)
-
-    if query.seq < 1 or query.seq > total:
+    stop = stop_info(hketa, route, query.seq)
+    if stop is None:
         if not ha:
+            total = len(flatten_stops(route))
             print(f"Error: -seq {query.seq} is out of range. Valid range is 1–{total}.")
         sys.exit(1)
 
-    co, stop_id = all_stops[query.seq - 1]
-    stop_data = hketa.stop_list.get(stop_id, {})
-    name_en = stop_data.get("name", {}).get("en", "—")
-    name_zh = stop_data.get("name", {}).get("zh", "—")
-
     if not ha:
-        print(f"Stop {query.seq}/{total}  [{co}]  {stop_id}  {name_en} / {name_zh}\n")
+        print(
+            f"Stop {stop.seq}/{stop.total}  [{stop.co}]  {stop.stop_id}  "
+            f"{stop.name_en} / {stop.name_zh}\n"
+        )
 
     try:
         etas = hketa.getEtas(route_id=query.route_id, seq=query.seq - 1, language="en")
@@ -260,10 +253,12 @@ def run(
             LogRecord(
                 timestamp=datetime.now(tz=tz).isoformat(timespec="seconds"),
                 route_id=query.route_id,
+                seq=stop.seq,
                 bus_schedule=schedule_detail,
                 alarm_time=alarm_dt.strftime("%H:%M"),
                 reason=alarm_reason,
                 eta_iso=schedule_eta_iso,
+                stop_id=stop.stop_id,
             ),
             log_file,
             log_url,

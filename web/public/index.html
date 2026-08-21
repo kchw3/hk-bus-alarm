@@ -143,7 +143,7 @@
         <table>
           <thead>
             <tr>
-              <th>Date</th><th>Route</th><th title="ETA from the last poll of the day">Schedule</th><th title="Alarm set by the first poll of the day">Alarm</th><th>Polls</th><th title="Timestamp of the last poll">Logged at</th><th title="Why the first poll chose that alarm time">Reason</th>
+              <th>Date</th><th>Route</th><th title="Stop the ETA was logged at (-seq)">Stop</th><th title="ETA from the last poll of the day">Schedule</th><th title="Alarm set by the first poll of the day">Alarm</th><th>Polls</th><th title="Timestamp of the last poll">Logged at</th><th title="Why the first poll chose that alarm time">Reason</th>
             </tr>
           </thead>
           <tbody id="tableBody"></tbody>
@@ -162,6 +162,6 @@
   </div>
 
   <script src="./vendor/plotly-basic.min.js"></script>
-  <script src="./app.js"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>

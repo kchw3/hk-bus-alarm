@@ -24,6 +24,64 @@ class ScheduleWindow:
     schedule_tz: timezone | None
 
 
+@dataclass
+class StopInfo:
+    """One resolved stop of a route.
+
+    `seq` is 1-based, matching the CLI flag rather than the 0-based index
+    `getEtas()` wants. `stop_id` is the operator's own identifier: unlike `seq`
+    it does not move when a route is re-surveyed, which is why it is logged
+    alongside `seq` and preferred when labelling a historical row.
+    """
+
+    seq: int
+    total: int
+    co: str
+    stop_id: str
+    name_en: str
+    name_zh: str
+
+
+# ---------------------------------------------------------------------------
+# Stop resolution
+# ---------------------------------------------------------------------------
+
+def flatten_stops(route: dict) -> list[tuple[str, str]]:
+    """Flatten a route's {"kmb": [...], "ctb": [...]} stop map into (co, stop_id).
+
+    Order is the iteration order of the stop map, which is what makes position
+    in this list the `seq` every tool and log row refers to.
+    """
+    return [
+        (co, stop_id)
+        for co, ids in route.get("stops", {}).items()
+        if isinstance(ids, list)
+        for stop_id in ids
+    ]
+
+
+def stop_info(hketa, route: dict, seq: int) -> StopInfo | None:
+    """Return the `StopInfo` for 1-based `seq`, or None if it is out of range.
+
+    Callers report the range error themselves — the four scripts word it
+    differently and one of them must stay silent under `-add_alarm_ha`.
+    """
+    all_stops = flatten_stops(route)
+    total = len(all_stops)
+    if seq < 1 or seq > total:
+        return None
+    co, stop_id = all_stops[seq - 1]
+    name = hketa.stop_list.get(stop_id, {}).get("name", {})
+    return StopInfo(
+        seq=seq,
+        total=total,
+        co=co,
+        stop_id=stop_id,
+        name_en=name.get("en", "—"),
+        name_zh=name.get("zh", "—"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # ETA helpers
 # ---------------------------------------------------------------------------

@@ -8,7 +8,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:init:local": "wrangler d1 execute hk-bus-alarm --local --file ./schema.sql",
-    "db:init:remote": "wrangler d1 execute hk-bus-alarm --remote --file ./schema.sql"
+    "db:init:remote": "wrangler d1 execute hk-bus-alarm --remote --file ./schema.sql",
+    "test": "node test/worker.test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.123.0"

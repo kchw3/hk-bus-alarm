@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS schedule_log (
     -- correct even if rows arrive with different UTC offsets.
     ts_epoch     INTEGER NOT NULL,
     route_id     TEXT    NOT NULL,
+    -- 1-based stop sequence, the `-seq` the run was invoked with. Half the
+    -- series identity: without it two stops of the same route share a primary
+    -- key and silently overwrite each other.
+    seq          INTEGER NOT NULL,
+    -- Operator stop id, captured at log time. Unlike `seq` it survives a route
+    -- being re-surveyed, so it anchors a historical row to the right stop.
+    -- '' for rows migrated or replayed from a CSV.
+    stop_id      TEXT    NOT NULL DEFAULT '',
     -- Human-readable schedule cell, e.g. '2026-08-17T07:26+08:00 (57m)'.
     bus_schedule TEXT    NOT NULL DEFAULT '',
     -- Matched schedule as a full ISO 8601 timestamp; '' when none was found.
@@ -19,15 +27,16 @@ CREATE TABLE IF NOT EXISTS schedule_log (
     eta_epoch    INTEGER,
     alarm_time   TEXT    NOT NULL DEFAULT '',
     reason       TEXT    NOT NULL DEFAULT '',
-    -- One row per run per route; makes re-ingest (and backfill) idempotent.
-    PRIMARY KEY (ts, route_id)
+    -- One row per run per route per stop; makes re-ingest (and backfill)
+    -- idempotent without merging two stops polled in the same second.
+    PRIMARY KEY (ts, route_id, seq)
 );
 
 CREATE INDEX IF NOT EXISTS idx_schedule_log_ts_epoch
     ON schedule_log (ts_epoch);
 
 CREATE INDEX IF NOT EXISTS idx_schedule_log_route_eta
-    ON schedule_log (route_id, eta_epoch);
+    ON schedule_log (route_id, seq, eta_epoch);
 
 
 -- Arrival tracking (track_bus_arrival.py). One row per distinct ETA value seen
@@ -44,6 +53,9 @@ CREATE TABLE IF NOT EXISTS arrival_track (
     session_id       TEXT    NOT NULL,
     route_id         TEXT    NOT NULL,
     seq              INTEGER NOT NULL,
+    -- Operator stop id, captured at track time. '' when replayed from a CSV,
+    -- which carries only `seq`.
+    stop_id          TEXT    NOT NULL DEFAULT '',
     -- One distinct ETA value observed, e.g. '2026-08-19T13:45:32+08:00'.
     eta_iso          TEXT    NOT NULL,
     eta_epoch        INTEGER NOT NULL,
@@ -63,4 +75,4 @@ CREATE INDEX IF NOT EXISTS idx_arrival_track_session
     ON arrival_track (session_id);
 
 CREATE INDEX IF NOT EXISTS idx_arrival_track_route_eta
-    ON arrival_track (route_id, eta_epoch);
+    ON arrival_track (route_id, seq, eta_epoch);

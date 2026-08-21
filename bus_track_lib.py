@@ -47,6 +47,10 @@ class TrackRecord:
     polls: int = 1
     window_from: str = ""
     window_to: str = ""
+    #: Operator stop identifier. Sent to the ingest endpoint but kept out of the
+    #: CSV, because `session_id` already pins `(route_id, seq)` and the id is
+    #: derivable from that pair. Empty when replayed from a log.
+    stop_id: str = ""
 
     def csv_row(self) -> list[str]:
         """Return the record as a CSV row matching `TRACK_CSV_HEADER`."""
@@ -72,6 +76,7 @@ class TrackRecord:
             "session_id": self.session_id,
             "route_id": self.route_id,
             "seq": self.seq,
+            "stop_id": self.stop_id,
             "eta_iso": self.eta_iso,
             "first_seen": self.first_seen,
             "last_seen": self.last_seen,

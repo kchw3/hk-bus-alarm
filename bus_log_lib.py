@@ -25,8 +25,13 @@ LOG_TOKEN_ENV = "BUS_LOG_TOKEN"
 #: "error code: 1010" before it ever reaches the Worker.
 USER_AGENT = "hk-bus-alarm/1.0 (+https://github.com/kchw3/hk-bus-alarm)"
 
-#: Column order of the CSV log. Unchanged from the original implementation.
-CSV_HEADER = ["timestamp", "route_id", "bus_schedule", "alarm_time", "reason"]
+#: Column order of the CSV log. `seq` was added third; every other column keeps
+#: its original position and value, so only a reader indexing past column 2 is
+#: affected. `backfill_log.py` accepts both layouts.
+CSV_HEADER = ["timestamp", "route_id", "seq", "bus_schedule", "alarm_time", "reason"]
+
+#: The pre-`seq` column order, still readable by `backfill_log.py`.
+LEGACY_CSV_HEADER = ["timestamp", "route_id", "bus_schedule", "alarm_time", "reason"]
 
 _POST_TIMEOUT_SECONDS = 5
 
@@ -35,33 +40,43 @@ _POST_TIMEOUT_SECONDS = 5
 class LogRecord:
     """One logged run of a schedule lookup.
 
-    `eta_iso` is the full ISO 8601 timestamp of the matched schedule (empty when no
-    schedule was found). It is sent to the ingest endpoint but deliberately kept out
-    of the CSV so the on-device log format stays byte-compatible with older runs.
+    `(route_id, seq)` is the series identity: without `seq` two stops of the same
+    route collapse into one series, both on the chart and in the database, where
+    they used to share a primary key.
+
+    `eta_iso` and `stop_id` are sent to the ingest endpoint but deliberately kept
+    out of the CSV: `eta_iso` is derivable from `bus_schedule`, and `stop_id` is
+    derivable from `(route_id, seq)`, so the on-device log stays one column wider
+    than it was rather than four.
     """
 
     timestamp: str
     route_id: str
+    seq: int
     bus_schedule: str
     alarm_time: str
     reason: str
     eta_iso: str = ""
+    stop_id: str = ""
 
     def csv_row(self) -> list[str]:
         """Return the record as a CSV row matching `CSV_HEADER`."""
         return [
             self.timestamp,
             self.route_id,
+            str(self.seq),
             self.bus_schedule,
             self.alarm_time,
             self.reason,
         ]
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict:
         """Return the record as the JSON object expected by `POST /api/ingest`."""
         return {
             "timestamp": self.timestamp,
             "route_id": self.route_id,
+            "seq": self.seq,
+            "stop_id": self.stop_id,
             "bus_schedule": self.bus_schedule,
             "eta_iso": self.eta_iso,
             "alarm_time": self.alarm_time,

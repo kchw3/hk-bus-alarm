@@ -64,6 +64,10 @@ Put the id into [`web/wrangler.jsonc`](web/wrangler.jsonc):
 Verify with `SELECT name FROM sqlite_master WHERE type='table';` — you should see
 `schedule_log`.
 
+> Applying `schema.sql` to a database that predates the `seq` column does **not**
+> upgrade it — the `CREATE TABLE IF NOT EXISTS` is a no-op against the old table.
+> See [Migrating an existing database](#migrating-an-existing-database-seq).
+
 ## Step 3 — Connect the repository (auto-deploy)
 
 This is Cloudflare **Workers Builds**: every push to `main` that touches the project
@@ -159,8 +163,100 @@ python backfill_log.py ~/bus_alarm.log \
     -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest
 ```
 
-Ingest upserts on `(timestamp, route_id)`, so re-running this is harmless — use it
-any time an upload failed.
+Ingest upserts on `(timestamp, route_id, seq)`, so re-running this is harmless — use
+it any time an upload failed.
+
+A log written before the `seq` column needs `-seq N` to say which stop its rows
+belong to; it is refused without one rather than guessing.
+
+```bash
+python backfill_log.py ~/bus_alarm.log -seq 5 \
+    -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest
+```
+
+---
+
+## Migrating an existing database (`seq`)
+
+Skip this on a fresh deployment — [`web/schema.sql`](web/schema.sql) already has
+the current shape. This is for a database created before **2026-08-21**, when
+`seq` was added.
+
+Two things change, and they must land together with the Worker that requires
+`seq`:
+
+1. **`schedule_log` is rebuilt.** SQLite cannot `ALTER` a primary key, and the
+   key widens from `(ts, route_id)` to `(ts, route_id, seq)`. Every existing row
+   is attributed to **seq 5** — every historical run of
+   `set_alarm_with_bus_eta.py` used `-seq 5`.
+2. **`arrival_track` is dropped and recreated empty.** Its rows came from a cron
+   job wrongly invoking `-seq 6`, so they describe the wrong stop. They survive
+   in the backup if ever wanted.
+
+### Back up first — this is not optional
+
+The rebuild drops the original table, and D1 does not accept `BEGIN`/`COMMIT`
+inside a file, so the statements run one at a time with no rollback.
+
+```bash
+cd web
+npx wrangler d1 export hk-bus-alarm --remote --output ./backup-pre-seq.sql
+```
+
+### Apply
+
+```bash
+npx wrangler d1 execute hk-bus-alarm --remote --file ./migrations/0001_add_seq.sql
+```
+
+**Dashboard:** open the database → **Console** → paste
+[`web/migrations/0001_add_seq.sql`](web/migrations/0001_add_seq.sql) → **Execute**.
+
+### Verify
+
+```bash
+# Every historical row now sits at seq 5, and none were lost.
+npx wrangler d1 execute hk-bus-alarm --remote \
+    --command "SELECT seq, COUNT(*) FROM schedule_log GROUP BY seq;"
+
+# Tracking starts from empty.
+npx wrangler d1 execute hk-bus-alarm --remote \
+    --command "SELECT COUNT(*) FROM arrival_track;"
+```
+
+### Deploy order
+
+This sequence has no window in which anything 400s:
+
+| # | Step | Why here |
+|---|---|---|
+| 1 | Update and ship the Python scripts | They start sending `seq`; the old Worker ignores unknown fields, so nothing breaks yet |
+| 2 | **Stop the tracking cron** | So it cannot write seq-6 rows into the table you are about to reset |
+| 3 | Back up, then run the migration | |
+| 4 | `npx wrangler deploy` | The new Worker requires `seq`, which step 1 already sends |
+| 5 | **Fix the tracking cron to `-seq 5`**, delete the old track log, restart it | |
+
+Step 5 is the one that matters. Restarting the cron unchanged just refills
+`arrival_track` with the wrong stop, and leaving `~/bus_track.log` in place means
+a later `backfill_track_log.py` re-ingests the sessions you just dropped:
+
+```bash
+mv ~/bus_track.log ~/bus_track.log.seq6-bad    # or rm
+```
+
+### The local CSV log
+
+`~/bus_alarm.log` gains a `seq` column too. Either convert it in place:
+
+```bash
+cp ~/bus_alarm.log ~/bus_alarm.log.bak
+sed -i -E '1s/^timestamp,route_id,/timestamp,route_id,seq,/; 1!s/^([^,]+,[^,]+),/\1,5,/' ~/bus_alarm.log
+head -3 ~/bus_alarm.log
+```
+
+…or leave it alone and pass `-seq 5` when replaying it. `backfill_log.py` reads
+both layouts. The `sed` is **not idempotent** — running it twice inserts the
+value twice.
 
 ---
 

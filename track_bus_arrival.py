@@ -60,8 +60,10 @@ from hk_bus_common import (
     _offset,
     eta_to_datetime,
     find_schedule,
+    flatten_stops,
     parse_hhmm,
     parse_tz,
+    stop_info,
 )
 from bus_log_lib import LOG_TOKEN_ENV, post_record, write_log_csv
 from bus_track_lib import TRACK_CSV_HEADER, TrackRecord
@@ -216,6 +218,7 @@ def run_tracking(
     route_id: str,
     seq: int,
     sink: TrackSink,
+    stop_id: str = "",
     now_fn,
     sleep_fn=time.sleep,
     max_runtime_minutes: int = DEFAULT_MAX_RUNTIME_MINUTES,
@@ -329,6 +332,7 @@ def run_tracking(
                     session_id=session_id,
                     route_id=route_id,
                     seq=seq,
+                    stop_id=stop_id,
                     eta_iso=eta_iso,
                     first_seen=poll_ts,
                     last_seen=poll_ts,
@@ -459,23 +463,15 @@ def run(
                 print(f"  {m}")
         sys.exit(1)
 
-    stop_list = route.get("stops", {})
-    all_stops = [
-        (co, stop_id)
-        for co, ids in stop_list.items()
-        if isinstance(ids, list)
-        for stop_id in ids
-    ]
-    total = len(all_stops)
-
-    if query.seq < 1 or query.seq > total:
+    stop = stop_info(hketa, route, query.seq)
+    if stop is None:
+        total = len(flatten_stops(route))
         print(f"Error: -seq {query.seq} is out of range. Valid range is 1–{total}.")
         sys.exit(1)
 
-    co, stop_id = all_stops[query.seq - 1]
-    stop_data = hketa.stop_list.get(stop_id, {})
-    name_en = stop_data.get("name", {}).get("en", "—")
-    name_zh = stop_data.get("name", {}).get("zh", "—")
+    co, stop_id = stop.co, stop.stop_id
+    name_en, name_zh = stop.name_en, stop.name_zh
+    total = stop.total
 
     tz = window.schedule_tz if window.schedule_tz is not None else timezone(timedelta(hours=8))
     today = date.today()
@@ -516,6 +512,7 @@ def run(
         to_dt=to_dt,
         route_id=query.route_id,
         seq=query.seq,
+        stop_id=stop.stop_id,
         sink=TrackSink(log_file, log_url, log_token),
         now_fn=lambda: datetime.now(tz=tz),
         max_runtime_minutes=max_runtime_minutes,

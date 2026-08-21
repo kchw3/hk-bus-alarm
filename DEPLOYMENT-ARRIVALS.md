@@ -49,6 +49,13 @@ SELECT name FROM sqlite_master WHERE type='table';
 -- expect: schedule_log, arrival_track
 ```
 
+> **Upgrading a table created before 2026-08-21?** `IF NOT EXISTS` is a no-op
+> against an existing `arrival_track`, so re-applying `schema.sql` will *not* add
+> the `stop_id` column. Use
+> [`web/migrations/0001_add_seq.sql`](web/migrations/0001_add_seq.sql) instead — it
+> drops and recreates the table, discarding its rows. See
+> [Migrating an existing database](DEPLOYMENT.md#migrating-an-existing-database-seq).
+
 ## Step 2 — Deploy the Worker and page
 
 Push to `main`. Workers Builds picks up the new routes in `web/src/index.js` and

@@ -46,6 +46,7 @@ from hk_bus_common import (
     DEFAULT_ROUTE_ID,
     _offset,
     find_schedule,
+    flatten_stops,
     format_eta_stamp,
     parse_hhmm,
     parse_tz,
@@ -186,13 +187,7 @@ def print_route_info(
         print("No stops found in route data.")
         return
 
-    # Flatten: {"kmb": [...], "ctb": [...], ...} → list of (co, stop_id)
-    all_stops = []
-    for co, ids in stop_list.items():
-        if isinstance(ids, list):
-            for stop_id in ids:
-                all_stops.append((co, stop_id))
-
+    all_stops = flatten_stops(route)
     total = len(all_stops)
 
     # --- Validate -seq ---

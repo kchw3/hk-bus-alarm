@@ -29,6 +29,7 @@ pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 | `backfill_log.py` | CLI to upload an existing CSV log to the chart ingest endpoint |
 | `track_bus_arrival.py` | Poll one stop until the bus arrives, to deduce its actual arrival time |
 | `bus_track_lib.py` | Arrival-tracking record type (CSV row and ingest payload) |
+| `tests/` | Regression tests (`python -m unittest discover -s tests`) |
 | `backfill_track_log.py` | CLI to upload an existing CSV track log to the arrivals endpoint |
 | `web/` | Cloudflare Worker + static pages publishing both charts |
 | `DEPLOYMENT.md` | Step-by-step Cloudflare setup, GitHub auto-deploy, and custom domain |
@@ -199,7 +200,7 @@ python set_alarm_with_bus_eta.py -seq N
 | `-alarm_label` | No | `Bus schedule` | Label shown on the Android clock alarm. |
 | `-alarm_default_time` | No | — | Fallback alarm time (`HH:MM`) used when no bus schedule is found in the search window. Uses the same timezone as `-search_schedule_tz`. If omitted and no schedule is found, the alarm is set to `now + 2 minutes`. |
 | `-alarm_minutes_before_schedule` | No | `0` | Set the alarm this many minutes before the found schedule time. |
-| `-log_file` | No | — | Path to a CSV log file. Each run appends one row with `timestamp`, `route_id`, `bus_schedule`, `alarm_time`, and `reason`. The header is written automatically when the file is new or empty. Logging is disabled if omitted. |
+| `-log_file` | No | — | Path to a CSV log file. Each run appends one row with `timestamp`, `route_id`, `seq`, `bus_schedule`, `alarm_time`, and `reason`. The header is written automatically when the file is new or empty. Logging is disabled if omitted. **The `seq` column was added on 2026-08-21**; see [Migrating a pre-`seq` log](#migrating-a-pre-seq-log). |
 | `-log_url` | No | — | Ingest endpoint of the chart (`https://hk-bus-alarm-chart.iteneti.top/api/ingest`). Each run uploads the same record, plus the matched schedule as a full ISO timestamp. Independent of `-log_file`, but **use both**: the CSV row is written first, so a failed upload stays replayable via `backfill_log.py`. Upload failures print a warning on stderr and never stop the alarm. |
 | `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token for `-log_url`. Prefer the environment variable, which keeps the token out of the process list. |
 
@@ -490,10 +491,12 @@ Shared logging layer used by `set_alarm_with_bus_eta.py` and `backfill_log.py`. 
 |---|---|
 | `timestamp` | ISO 8601 run time, e.g. `2026-08-17T06:29:05+08:00`. |
 | `route_id` | Full route ID string. |
+| `seq` | 1-based stop sequence — the `-seq` the run was invoked with. Together with `route_id` this identifies the series; without it two stops of one route are indistinguishable. |
 | `bus_schedule` | Human-readable matched schedule, e.g. `2026-08-17T07:26+08:00 (57m)`. Empty when none was found. |
 | `alarm_time` | `HH:MM` the alarm was set to. |
 | `reason` | Why that alarm time was chosen, e.g. `30m before schedule; clamped to now+2m`. |
-| `eta_iso` | Matched schedule as a full ISO 8601 timestamp. Uploaded only — deliberately **not** written to the CSV, so the on-device log format is unchanged. |
+| `eta_iso` | Matched schedule as a full ISO 8601 timestamp. Uploaded only — deliberately **not** written to the CSV, since it is derivable from `bus_schedule`. |
+| `stop_id` | Operator stop id, resolved at run time. Uploaded only — derivable from `(route_id, seq)`, so it stays out of the CSV. Unlike `seq` it survives a route being re-surveyed, which is what anchors an old row to the right stop. |
 
 ### Functions
 
@@ -510,12 +513,14 @@ Upload failures print one warning line to **stderr** and are swallowed — a net
 
 ## backfill_log.py
 
-Uploads an existing CSV log to the chart so historical runs appear alongside new ones. `eta_iso` is reconstructed from the `bus_schedule` column. Rows with no schedule are skipped, and ingest is idempotent (`ts` + `route_id` is the primary key), so re-running is safe.
+Uploads an existing CSV log to the chart so historical runs appear alongside new ones. `eta_iso` is reconstructed from the `bus_schedule` column. Rows with no schedule are skipped, and ingest is idempotent (`ts` + `route_id` + `seq` is the primary key), so re-running is safe.
+
+Both CSV layouts are read. A file whose header names `seq` uses its own values; a pre-`seq` file requires `-seq N`, and is refused without it — guessing would file an entire history under the wrong stop.
 
 ### Usage
 
 ```
-python backfill_log.py LOG_FILE -log_url URL [-log_token TOKEN] [-batch_size N] [-dry_run]
+python backfill_log.py LOG_FILE -log_url URL [-log_token TOKEN] [-seq N] [-batch_size N] [-dry_run]
 ```
 
 | Parameter | Required | Default | Description |
@@ -523,13 +528,29 @@ python backfill_log.py LOG_FILE -log_url URL [-log_token TOKEN] [-batch_size N] 
 | `LOG_FILE` | Yes | — | Path to the CSV log file. |
 | `-log_url` | Yes | — | Ingest endpoint. |
 | `-log_token` | No | `$BUS_LOG_TOKEN` | Bearer token. |
+| `-seq` | Only for a pre-`seq` log | — | Stop sequence to attribute every row to. Ignored when the file already has a `seq` column. |
 | `-batch_size` | No | `100` | Records per POST request. |
 | `-dry_run` | No | off | Print what would be sent without contacting the endpoint. |
 
 ```bash
 python backfill_log.py 81.log -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest -dry_run
 python backfill_log.py 81.log -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest
+
+# A log written before the `seq` column existed, replayed as stop 5
+python backfill_log.py 81.log -seq 5 -log_url https://hk-bus-alarm-chart.iteneti.top/api/ingest
 ```
+
+### Migrating a pre-`seq` log
+
+`-seq` replays an old file without touching it. To convert one in place instead — so it needs no flag ever again — rewrite the header and insert the value as the third field:
+
+```bash
+cp 81.log 81.log.bak
+sed -i -E '1s/^timestamp,route_id,/timestamp,route_id,seq,/; 1!s/^([^,]+,[^,]+),/\1,5,/' 81.log
+head -3 81.log     # check before trusting it
+```
+
+**Not idempotent** — running it twice inserts the value twice. Substitute your own stop for `5`.
 
 ---
 
@@ -705,20 +726,29 @@ A Cloudflare Worker that stores uploaded records in D1 and serves a public, no-l
 |---|---|
 | `web/wrangler.jsonc` | Worker config: static assets, D1 binding |
 | `web/schema.sql` | `schedule_log` and `arrival_track` tables |
-| `web/src/index.js` | the four API routes, plus static assets |
-| `web/public/` | `index.html`, `app.js`, vendored `plotly-basic.min.js` |
+| `web/migrations/` | one-off schema changes applied to an existing database |
+| `web/test/worker.test.mjs` | Node harness for the Worker (`cd web && npm test`) — `workerd` cannot run in every container, so D1, `caches` and `fetch` are stubbed |
+| `web/src/index.js` | the five API routes, plus static assets |
+| `web/public/` | `index.html`, `app.js`, `stop-labels.js`, vendored `plotly-basic.min.js` |
 | `web/public/arrivals/` | the arrival tracking page and its `app.js` |
 
 ### API
 
 | Endpoint | Auth | Description |
 |---|---|---|
-| `POST /api/ingest` | `Authorization: Bearer <INGEST_TOKEN>` | Accepts one record object or an array (max 500, 256 KB). Upserts on `(timestamp, route_id)`. |
-| `GET /api/data.json` | None | All records with a schedule, oldest first. Optional `?days=N` and `?route=<route_id>`. Cached 60s. |
+| `POST /api/ingest` | `Authorization: Bearer <INGEST_TOKEN>` | Accepts one record object or an array (max 500, 256 KB). Upserts on `(timestamp, route_id, seq)`. **`seq` is required** and rejected with 400 if missing — a record without one would silently merge two stops. |
+| `GET /api/data.json` | None | All records with a schedule, oldest first. Optional `?days=N`, `?route=<route_id>` and `?seq=N`. Cached 60s. |
 | `POST /api/arrivals/ingest` | Same token | Arrival-tracking observations. Upserts on `(session_id, eta_iso)`, widening the observation bracket rather than overwriting it. |
 | `GET /api/arrivals/data.json` | None | All tracked estimates, grouped by session. Optional `?days=N`, `?route=`, `?session=`. Cached 60s. |
+| `GET /api/stops.json` | None | Stop names for one route: `?route=<route_id>` → `[{seq, co, stop_id, name_en, name_zh}]`, `seq` 1-based. Cached 24h. |
 
 Both ingest endpoints share the `INGEST_TOKEN` secret and the same size guards; they differ only in the table they write.
+
+#### How stops get their names
+
+The database stores `seq` and never a stop name. `/api/stops.json` is the only place the two are joined, and it happens at render time: `web/public/stop-labels.js` calls it once per route and both pages label their series `81+1+… · stop 5 · KOWLOON CENTRAL POST OFFICE`.
+
+The Worker resolves the name from the same upstream file `hk-bus-eta` reads (`routeFareList.min.json`, ~8 MB). That is far too heavy to hand to a browser, so the Worker parses it, returns just the requested route's stops, and caches the small response for a day. If the lookup fails the endpoint returns 503 and the pages fall back to a bare `stop 5` — a chart that cannot reach the metadata still plots its data.
 
 ### /arrivals/ — arrival tracking chart
 

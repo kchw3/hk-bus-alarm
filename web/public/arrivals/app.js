@@ -15,6 +15,8 @@
  * misrepresent the track.
  */
 
+import { preloadStops, seriesLabel, stopName } from "../stop-labels.js";
+
 // Absolute: this page lives one level down, so the schedule chart's relative
 // "./api/…" idiom would resolve to /arrivals/api/… here.
 const DATA_URL = "/api/arrivals/data.json";
@@ -111,6 +113,10 @@ function groupBySession(records) {
       sessionId,
       route: final.route_id,
       seq: final.seq,
+      // Resolved once per session; every trace below reuses it, so the route
+      // and stop name stay identical across the three marker series.
+      label: seriesLabel(final.route_id, final.seq),
+      stop: stopName(final.route_id, final.seq),
       rows,
       first,
       final,
@@ -150,7 +156,7 @@ function buildTraces(sessions) {
         x.push(row.eta.date);
         y.push(row.eta.dummy);
         customdata.push([
-          `${session.route} · stop ${session.seq}`,
+          session.label,
           `estimate ${row.eta.clock} (${signedMinutes(
             minutesBetween(session.final.eta_epoch, row.eta_epoch),
           )} vs final)`,
@@ -181,7 +187,7 @@ function buildTraces(sessions) {
     x: sessions.map((s) => s.final.eta.date),
     y: sessions.map((s) => s.final.eta.dummy),
     customdata: sessions.map((s) => [
-      `${s.route} · stop ${s.seq}`,
+      s.label,
       `final estimate ${s.final.eta.clock}`,
       `drifted ${signedMinutes(s.drift)} across ${s.rows.length} estimate(s)`,
     ]),
@@ -203,7 +209,7 @@ function buildTraces(sessions) {
       x: overdue.map((s) => s.final.eta.date),
       y: overdue.map((s) => s.lastSeen.dummy),
       customdata: overdue.map((s) => [
-        `${s.route} · stop ${s.seq}`,
+        s.label,
         `last sighting ${s.lastSeen.clock}`,
         `still listed ${signedMinutes(
           minutesBetween(s.final.eta_epoch, s.final.last_seen_epoch),
@@ -348,7 +354,7 @@ function renderTable(sessions) {
     const cells = [
       [session.final.eta.date, false],
       [session.route, false],
-      [String(session.seq), false],
+      [`${session.seq} · ${session.stop}`, false],
       [session.first.eta.clock, false],
       [session.final.eta.clock, false],
       [session.overdue ? session.lastSeen.clock : "—", false],
@@ -391,8 +397,12 @@ function render() {
 
 function updateSubtitle() {
   const sessions = new Set(state.records.map((r) => r.session_id));
-  const routes = new Set(state.records.map((r) => r.route_id));
-  const routeText = routes.size === 1 ? [...routes][0] : `${routes.size} routes`;
+  const keys = new Set(state.records.map((r) => `${r.route_id}|${r.seq}`));
+  const first = state.records[0];
+  const routeText =
+    keys.size === 1 && first
+      ? seriesLabel(first.route_id, first.seq)
+      : `${keys.size} route/stop series`;
   el.subtitle.textContent =
     `${routeText} · ${sessions.size} tracked bus${sessions.size === 1 ? "" : "es"} · ` +
     `${state.records.length} estimate${state.records.length === 1 ? "" : "s"} recorded`;
@@ -443,6 +453,10 @@ async function main() {
     showMessage("No arrival tracks recorded yet.");
     return;
   }
+
+  // Labels resolve synchronously inside the trace builders, so warm the stop
+  // metadata first. preloadStops() never rejects; labels fall back to "stop N".
+  await preloadStops(state.records.map((r) => r.route_id));
 
   updateSubtitle();
   wireControls();
